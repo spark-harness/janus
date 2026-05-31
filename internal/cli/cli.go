@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"janus/internal/gate"
+	"janus/internal/requirement"
 )
 
 const (
@@ -174,13 +175,39 @@ func runRequirement(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	switch args[0] {
 	case "verify":
-		fmt.Fprintln(stderr, "requirement verify is not implemented yet")
-		return ExitInvalid
+		return runRequirementVerify(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown requirement subcommand %q\n", args[0])
 		printRequirementUsage(stderr)
 		return ExitInvalid
 	}
+}
+
+func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("requirement verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requirementID := flags.String("requirement", "", "requirement id")
+	target := flags.String("target", "", "verification target")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *requirementID == "" || *target == "" || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "requirement verify requires --requirement and --target")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	if err := requirement.Verify(root, *requirementID, *target, now()); err != nil {
+		return printRequirementVerifyError(stderr, err)
+	}
+
+	fmt.Fprintln(stdout, "verified")
+	return ExitOK
 }
 
 func printUsage(w io.Writer) {
@@ -248,6 +275,18 @@ func printValidationError(stderr io.Writer, err error) {
 
 func printVerifyError(stderr io.Writer, err error) int {
 	var verifyErr *gate.VerifyError
+	if errors.As(err, &verifyErr) {
+		for _, problem := range verifyErr.Problems {
+			fmt.Fprintf(stderr, "- %s\n", problem)
+		}
+		return verifyErr.Code
+	}
+	fmt.Fprintln(stderr, err)
+	return ExitInvalid
+}
+
+func printRequirementVerifyError(stderr io.Writer, err error) int {
+	var verifyErr *requirement.VerifyError
 	if errors.As(err, &verifyErr) {
 		for _, problem := range verifyErr.Problems {
 			fmt.Fprintf(stderr, "- %s\n", problem)

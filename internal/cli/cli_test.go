@@ -206,6 +206,46 @@ func TestGateVerifyReturnsStaleInputCode(t *testing.T) {
 	}
 }
 
+func TestRequirementVerifyPasses(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "verify", "--requirement", "T12345", "--target", "merge"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "verified" {
+		t.Fatalf("expected verified output, got %q", stdout.String())
+	}
+}
+
+func TestRequirementVerifyRequiresReports(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "verify", "--requirement", "T12345", "--target", "merge"}, &stdout, &stderr)
+
+	if code != ExitMissing {
+		t.Fatalf("expected exit code %d, got %d", ExitMissing, code)
+	}
+	if !strings.Contains(stderr.String(), "missing gate reports") {
+		t.Fatalf("expected missing gate output, got %q", stderr.String())
+	}
+}
+
 func writeRequirementInput(t *testing.T, root string, content string) {
 	t.Helper()
 	path := filepath.Join(root, "requirements", "T12345", "requirement.md")
