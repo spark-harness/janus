@@ -51,7 +51,9 @@ func runGate(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "validate":
 		return runGateValidate(args[1:], stdout, stderr)
-	case "render", "verify":
+	case "render":
+		return runGateRender(args[1:], stdout, stderr)
+	case "verify":
 		fmt.Fprintf(stderr, "gate %s is not implemented yet\n", args[0])
 		return ExitInvalid
 	default:
@@ -59,6 +61,53 @@ func runGate(args []string, stdout io.Writer, stderr io.Writer) int {
 		printGateUsage(stderr)
 		return ExitInvalid
 	}
+}
+
+func runGateRender(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("gate render", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	input := flags.String("input", "", "gate JSON path")
+	output := flags.String("output", "", "gate Markdown path")
+	check := flags.Bool("check", false, "check whether output is up to date")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *input == "" || *output == "" || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "gate render requires --input and --output")
+		printGateUsage(stderr)
+		return ExitInvalid
+	}
+
+	report, code := readValidGateFile(*input, stderr)
+	if code != ExitOK {
+		return code
+	}
+	rendered := []byte(gate.Render(report, *input))
+
+	if *check {
+		current, err := os.ReadFile(*output)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(stderr, "missing file: %s\n", *output)
+				return ExitMissing
+			}
+			fmt.Fprintf(stderr, "cannot read %s: %v\n", *output, err)
+			return ExitMissing
+		}
+		if string(current) != string(rendered) {
+			fmt.Fprintf(stderr, "rendered Markdown is out of date: %s\n", *output)
+			return ExitInvalid
+		}
+		fmt.Fprintln(stdout, "up to date")
+		return ExitOK
+	}
+
+	if err := os.WriteFile(*output, rendered, 0o644); err != nil {
+		fmt.Fprintf(stderr, "cannot write %s: %v\n", *output, err)
+		return ExitMissing
+	}
+	fmt.Fprintf(stdout, "rendered %s\n", *output)
+	return ExitOK
 }
 
 func runGateValidate(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -139,6 +188,18 @@ func readGateFile(path string, stderr io.Writer) (*gate.Report, int) {
 	report, err := gate.Read(file)
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid JSON: %v\n", err)
+		return nil, ExitInvalid
+	}
+	return report, ExitOK
+}
+
+func readValidGateFile(path string, stderr io.Writer) (*gate.Report, int) {
+	report, code := readGateFile(path, stderr)
+	if code != ExitOK {
+		return nil, code
+	}
+	if err := gate.Validate(report); err != nil {
+		printValidationError(stderr, err)
 		return nil, ExitInvalid
 	}
 	return report, ExitOK

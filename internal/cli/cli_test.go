@@ -90,6 +90,80 @@ func TestGateValidateInvalidFile(t *testing.T) {
 	}
 }
 
+func TestGateRenderWritesMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	output := filepath.Join(dir, "3.3-design-review.md")
+	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "render", "--input", input, "--output", output}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	rendered, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), "Generated from 3.3-design-review.gate.json") {
+		t.Fatalf("expected generated header, got %q", string(rendered))
+	}
+}
+
+func TestGateRenderCheckDetectsDrift(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	output := filepath.Join(dir, "3.3-design-review.md")
+	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "render", "--check", "--input", input, "--output", output}, &stdout, &stderr)
+
+	if code != ExitInvalid {
+		t.Fatalf("expected exit code %d, got %d", ExitInvalid, code)
+	}
+	if !strings.Contains(stderr.String(), "out of date") {
+		t.Fatalf("expected drift output, got %q", stderr.String())
+	}
+}
+
+func TestGateRenderCheckPassesWhenCurrent(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	output := filepath.Join(dir, "3.3-design-review.md")
+	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "render", "--input", input, "--output", output}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("expected render exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"gate", "render", "--check", "--input", input, "--output", output}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected check exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "up to date") {
+		t.Fatalf("expected up to date output, got %q", stdout.String())
+	}
+}
+
 func validGateJSON() string {
 	return `{
   "schema_version": "1.0",
