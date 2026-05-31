@@ -20,6 +20,8 @@ const (
 	ExitInvalidWaiver   = 4
 	ExitStaleInput      = 5
 	ExitEvidenceFailure = 6
+
+	Version = "0.1.0"
 )
 
 func Run(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -33,6 +35,11 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGate(args[1:], stdout, stderr)
 	case "requirement":
 		return runRequirement(args[1:], stdout, stderr)
+	case "hook":
+		return runHook(args[1:], stdout, stderr)
+	case "version", "--version":
+		fmt.Fprintf(stdout, "janus %s\n", Version)
+		return ExitOK
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return ExitOK
@@ -216,6 +223,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
 	fmt.Fprintln(w, "  janus gate verify --input <gate.json>")
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge")
+	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
+	fmt.Fprintln(w, "  janus version")
 }
 
 func printGateUsage(w io.Writer) {

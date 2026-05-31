@@ -10,7 +10,27 @@ Janus 是 Harness 门禁 CLI。它把 `*.gate.json` 作为门禁判定事实源�
 go build -o ./bin/janus ./cmd/janus
 ```
 
+构建所有目标平台：
+
+```sh
+./scripts/build-all.sh
+```
+
+Windows PowerShell：
+
+```powershell
+./scripts/build-all.ps1
+```
+
 ## 命令
+
+### 查看版本
+
+```sh
+janus version
+```
+
+所有 Harness 运行环境必须保证 `janus` 在 PATH 中，并能执行 `janus version`。
 
 ### 校验门禁 JSON
 
@@ -77,6 +97,20 @@ janus requirement verify \
 - 如果 gate 声明 `idl_impact.impact = "no"`，必须提供 `idl_impact.na_reason`。
 
 后续如果新增必需 gate 清单或阶段配置，`requirement verify` 应改为读取配置，而不是只验证已发现的 gate 文件。
+
+### Codex Hook 输出
+
+```sh
+janus hook gate-drift-check
+```
+
+该命令扫描当前仓库 `requirements/**/gates/*.gate.json`，检查对应 Markdown 是否由当前 JSON 渲染。输出 Codex Hook JSON，可在 macOS、Linux 和 Windows 上使用。
+
+指定仓库根目录：
+
+```sh
+janus hook gate-drift-check --root /path/to/harness-repo
+```
 
 ## 退出码
 

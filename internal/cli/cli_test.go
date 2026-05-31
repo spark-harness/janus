@@ -39,6 +39,23 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunVersion(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run([]string{"version"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d", ExitOK, code)
+	}
+	if strings.TrimSpace(stdout.String()) != "janus "+Version {
+		t.Fatalf("expected version output, got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
 func TestGateValidateValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "3.3-design-review.gate.json")
@@ -243,6 +260,76 @@ func TestRequirementVerifyRequiresReports(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "missing gate reports") {
 		t.Fatalf("expected missing gate output, got %q", stderr.String())
+	}
+}
+
+func TestHookGateDriftCheckPassesWithoutRequirements(t *testing.T) {
+	dir := t.TempDir()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"hook", "gate-drift-check", "--root", dir}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"continue":true`) {
+		t.Fatalf("expected continue response, got %q", stdout.String())
+	}
+}
+
+func TestHookGateDriftCheckBlocksMissingMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"hook", "gate-drift-check", "--root", dir}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"continue":false`) {
+		t.Fatalf("expected stop response, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "missing rendered gate Markdown") {
+		t.Fatalf("expected missing markdown reason, got %q", stdout.String())
+	}
+}
+
+func TestHookGateDriftCheckPassesRenderedMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
+	mdPath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.md")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "render", "--input", gatePath, "--output", mdPath}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("expected render exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"hook", "gate-drift-check", "--root", dir}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"continue":true`) {
+		t.Fatalf("expected continue response, got %q", stdout.String())
 	}
 }
 
