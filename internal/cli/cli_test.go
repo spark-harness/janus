@@ -164,6 +164,59 @@ func TestGateRenderCheckPassesWhenCurrent(t *testing.T) {
 	}
 }
 
+func TestGateVerifyPasses(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "verify", "--input", input}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "verified" {
+		t.Fatalf("expected verified output, got %q", stdout.String())
+	}
+}
+
+func TestGateVerifyReturnsStaleInputCode(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "changed")
+	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "verify", "--input", input}, &stdout, &stderr)
+
+	if code != ExitStaleInput {
+		t.Fatalf("expected exit code %d, got %d", ExitStaleInput, code)
+	}
+	if !strings.Contains(stderr.String(), "sha256 mismatch") {
+		t.Fatalf("expected stale output, got %q", stderr.String())
+	}
+}
+
+func writeRequirementInput(t *testing.T, root string, content string) {
+	t.Helper()
+	path := filepath.Join(root, "requirements", "T12345", "requirement.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func validGateJSON() string {
 	return `{
   "schema_version": "1.0",
@@ -178,7 +231,7 @@ func validGateJSON() string {
   "inputs": [
     {
       "path": "requirements/T12345/requirement.md",
-      "sha256": "8d969eef6ecad3c29a3a629280e686cff8fab4d5a86c84a36c8f7cd6b5bfc2f7"
+      "sha256": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92"
     }
   ],
   "checklist": [

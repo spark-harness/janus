@@ -84,7 +84,7 @@ func validReport() *Report {
 		Inputs: []Artifact{
 			{
 				Path:   "requirements/T12345/requirement.md",
-				SHA256: "8d969eef6ecad3c29a3a629280e686cff8fab4d5a86c84a36c8f7cd6b5bfc2f7",
+				SHA256: "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
 			},
 		},
 		Checklist: []ChecklistItem{

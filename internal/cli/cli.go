@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"janus/internal/gate"
 )
@@ -54,13 +55,42 @@ func runGate(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "render":
 		return runGateRender(args[1:], stdout, stderr)
 	case "verify":
-		fmt.Fprintf(stderr, "gate %s is not implemented yet\n", args[0])
-		return ExitInvalid
+		return runGateVerify(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown gate subcommand %q\n", args[0])
 		printGateUsage(stderr)
 		return ExitInvalid
 	}
+}
+
+func runGateVerify(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("gate verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	input := flags.String("input", "", "gate JSON path")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *input == "" || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "gate verify requires --input")
+		printGateUsage(stderr)
+		return ExitInvalid
+	}
+
+	report, code := readValidGateFile(*input, stderr)
+	if code != ExitOK {
+		return code
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	if err := gate.Verify(report, root, now()); err != nil {
+		return printVerifyError(stderr, err)
+	}
+
+	fmt.Fprintln(stdout, "verified")
+	return ExitOK
 }
 
 func runGateRender(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -214,4 +244,20 @@ func printValidationError(stderr io.Writer, err error) {
 		return
 	}
 	fmt.Fprintln(stderr, err)
+}
+
+func printVerifyError(stderr io.Writer, err error) int {
+	var verifyErr *gate.VerifyError
+	if errors.As(err, &verifyErr) {
+		for _, problem := range verifyErr.Problems {
+			fmt.Fprintf(stderr, "- %s\n", problem)
+		}
+		return verifyErr.Code
+	}
+	fmt.Fprintln(stderr, err)
+	return ExitInvalid
+}
+
+var now = func() time.Time {
+	return time.Now()
 }

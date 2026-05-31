@@ -16,7 +16,7 @@ func TestRenderIncludesGeneratedHeaderAndDecision(t *testing.T) {
 	if !strings.Contains(rendered, "允许进入 4.1 任务拆分。") {
 		t.Fatalf("expected decision, got %q", rendered)
 	}
-	if !strings.Contains(rendered, "| `requirements/T12345/requirement.md` | `8d969eef6ecad3c29a3a629280e686cff8fab4d5a86c84a36c8f7cd6b5bfc2f7` |") {
+	if !strings.Contains(rendered, "| `requirements/T12345/requirement.md` | `8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92` |") {
 		t.Fatalf("expected input snapshot table, got %q", rendered)
 	}
 }
