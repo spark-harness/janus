@@ -21,7 +21,11 @@ func (e *VerifyError) Error() string {
 	return strings.Join(e.Problems, "\n")
 }
 
-func Verify(root string, requirementID string, target string, now time.Time) error {
+type VerifyOptions struct {
+	TicketID string
+}
+
+func Verify(root string, requirementID string, target string, now time.Time, options VerifyOptions) error {
 	if strings.TrimSpace(requirementID) == "" {
 		return &VerifyError{Code: gate.VerifyInvalid, Problems: []string{"requirement is required"}}
 	}
@@ -53,7 +57,11 @@ func Verify(root string, requirementID string, target string, now time.Time) err
 		if err := checkIDLPolicy(report); err != nil {
 			return err
 		}
-		if err := gate.Verify(report, root, now); err != nil {
+		ticketID := strings.TrimSpace(options.TicketID)
+		if ticketID == "" {
+			ticketID = requirementID
+		}
+		if err := gate.Verify(report, root, now, gate.VerifyOptions{TicketID: ticketID}); err != nil {
 			var verifyErr *gate.VerifyError
 			if errors.As(err, &verifyErr) {
 				return &VerifyError{Code: verifyErr.Code, Problems: prefixProblems(path, verifyErr.Problems)}

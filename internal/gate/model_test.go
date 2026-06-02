@@ -74,7 +74,7 @@ func validReport() *Report {
 	return &Report{
 		SchemaVersion:   "1.0",
 		RequirementID:   "T12345",
-		GateID:          "3.3-design-review",
+		GateID:          "design-review",
 		GateName:        "设计门禁",
 		Stage:           "3.3",
 		CheckedBy:       "detail-design-quality-reviewer",

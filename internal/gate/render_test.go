@@ -8,9 +8,9 @@ import (
 func TestRenderIncludesGeneratedHeaderAndDecision(t *testing.T) {
 	report := validReport()
 
-	rendered := Render(report, "requirements/T12345/gates/3.3-design-review.gate.json")
+	rendered := Render(report, "requirements/T12345/gates/design-review.gate.json")
 
-	if !strings.HasPrefix(rendered, "<!-- Generated from 3.3-design-review.gate.json. Do not edit blocking fields here. -->") {
+	if !strings.HasPrefix(rendered, "<!-- Generated from design-review.gate.json. Do not edit blocking fields here. -->") {
 		t.Fatalf("expected generated header, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "允许进入 4.1 任务拆分。") {

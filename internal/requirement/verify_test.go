@@ -11,9 +11,9 @@ import (
 func TestVerifyRequirementPassesAllGates(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
-	writeFile(t, root, "requirements/T12345/gates/3.3-design-review.gate.json", validGateJSON())
+	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", validGateJSON())
 
-	err := Verify(root, "T12345", "merge", time.Now())
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	if err != nil {
 		t.Fatalf("expected requirement verification to pass, got %v", err)
@@ -23,7 +23,7 @@ func TestVerifyRequirementPassesAllGates(t *testing.T) {
 func TestVerifyRequirementRequiresGateReports(t *testing.T) {
 	root := t.TempDir()
 
-	err := Verify(root, "T12345", "merge", time.Now())
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	verifyErr := assertVerifyError(t, err)
 	if verifyErr.Code != 3 {
@@ -34,9 +34,9 @@ func TestVerifyRequirementRequiresGateReports(t *testing.T) {
 func TestVerifyRequirementRejectsMismatchedRequirementID(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
-	writeFile(t, root, "requirements/T12345/gates/3.3-design-review.gate.json", strings.Replace(validGateJSON(), `"requirement_id": "T12345"`, `"requirement_id": "T99999"`, 1))
+	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", strings.Replace(validGateJSON(), `"requirement_id": "T12345"`, `"requirement_id": "T99999"`, 1))
 
-	err := Verify(root, "T12345", "merge", time.Now())
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	verifyErr := assertVerifyError(t, err)
 	if verifyErr.Code != 2 {
@@ -48,9 +48,9 @@ func TestVerifyRequirementRequiresIDLEvidenceWhenImpacted(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
 	report := strings.Replace(validGateJSON(), `"decision": "允许进入 4.1 任务拆分。"`, `"idl_impact": {"impact": "yes"}, "decision": "允许进入 4.1 任务拆分。"`, 1)
-	writeFile(t, root, "requirements/T12345/gates/3.3-design-review.gate.json", report)
+	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", report)
 
-	err := Verify(root, "T12345", "merge", time.Now())
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	verifyErr := assertVerifyError(t, err)
 	if verifyErr.Code != 6 {
@@ -64,13 +64,41 @@ func TestVerifyRequirementRejectsBlockedGate(t *testing.T) {
 	report := strings.Replace(validGateJSON(), `"result": "PASS"`, `"result": "BLOCKED"`, 1)
 	report = strings.Replace(report, `"blocks_next_stage": false`, `"blocks_next_stage": true`, 1)
 	report = strings.Replace(report, `"blocking_issues": []`, `"blocking_issues": [{"issue":"缺少回滚方案","required_action":"补充回滚策略","owner":"backend"}]`, 1)
-	writeFile(t, root, "requirements/T12345/gates/3.3-design-review.gate.json", report)
+	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", report)
 
-	err := Verify(root, "T12345", "merge", time.Now())
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	verifyErr := assertVerifyError(t, err)
 	if verifyErr.Code != 1 {
 		t.Fatalf("expected code 1, got %d", verifyErr.Code)
+	}
+}
+
+func TestVerifyRequirementUsesRequirementIDAsDefaultTicketID(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345"))
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	if err != nil {
+		t.Fatalf("expected requirement verification to pass, got %v", err)
+	}
+}
+
+func TestVerifyRequirementRejectsMismatchedRepoBranches(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T99999"))
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	verifyErr := assertVerifyError(t, err)
+	if verifyErr.Code != 7 {
+		t.Fatalf("expected code 7, got %d", verifyErr.Code)
+	}
+	if !strings.Contains(verifyErr.Error(), "does not match") {
+		t.Fatalf("expected branch mismatch output, got %q", verifyErr.Error())
 	}
 }
 
@@ -101,7 +129,7 @@ func validGateJSON() string {
 	return `{
   "schema_version": "1.0",
   "requirement_id": "T12345",
-  "gate_id": "3.3-design-review",
+  "gate_id": "design-review",
   "gate_name": "设计门禁",
   "stage": "3.3",
   "checked_by": "detail-design-quality-reviewer",
@@ -128,4 +156,21 @@ func validGateJSON() string {
   },
   "decision": "允许进入 4.1 任务拆分。"
 }`
+}
+
+func gateJSONWithRepos(harnessBranch string, businessBranch string) string {
+	repos := `  "repos": [
+    {
+      "name": "harness-repo",
+      "branch": "` + harnessBranch + `",
+      "commit": "abc123"
+    },
+    {
+      "name": "business-repo",
+      "branch": "` + businessBranch + `",
+      "commit": "def456"
+    }
+  ],
+`
+	return strings.Replace(validGateJSON(), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
 }

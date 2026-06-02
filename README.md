@@ -35,7 +35,7 @@ janus version
 ### 校验门禁 JSON
 
 ```sh
-janus gate validate requirements/T12345/gates/3.3-design-review.gate.json
+janus gate validate requirements/T12345/gates/design-review.gate.json
 ```
 
 校验内容包括：
@@ -52,28 +52,30 @@ janus gate validate requirements/T12345/gates/3.3-design-review.gate.json
 
 ```sh
 janus gate render \
-  --input requirements/T12345/gates/3.3-design-review.gate.json \
-  --output requirements/T12345/gates/3.3-design-review.md
+  --input requirements/T12345/gates/design-review.gate.json \
+  --output requirements/T12345/gates/design-review.md
 ```
 
 检查 Markdown 是否漂移：
 
 ```sh
 janus gate render --check \
-  --input requirements/T12345/gates/3.3-design-review.gate.json \
-  --output requirements/T12345/gates/3.3-design-review.md
+  --input requirements/T12345/gates/design-review.gate.json \
+  --output requirements/T12345/gates/design-review.md
 ```
 
 ### 验证单个门禁
 
 ```sh
 janus gate verify \
-  --input requirements/T12345/gates/3.3-design-review.gate.json
+  --input requirements/T12345/gates/design-review.gate.json \
+  --ticket-id T12345
 ```
 
 `gate verify` 会先执行 JSON 校验，再检查：
 
 - `inputs[].sha256` 是否匹配当前文件内容。
+- 如果 gate JSON 包含 `repos`，必须传入 `--ticket-id`，并且所有 `repos[].branch` 必须一致且包含该 ticket id。
 - `result` 是否为 `BLOCKED`。
 - `WAIVED` 是否已过期。
 - `evidence[].sha256` 是否匹配当前证据文件。
@@ -93,6 +95,7 @@ janus requirement verify \
 - 查找 `requirements/<requirement-id>/gates/*.gate.json`。
 - 至少必须存在一个 gate JSON。
 - 每个 gate JSON 都必须通过 `gate verify`。
+- 如果 gate JSON 包含 `repos`，默认使用 `--requirement` 作为 ticket id 校验分支；需要覆盖时可传 `--ticket-id`。
 - 如果 gate 声明 `idl_impact.impact = "yes"`，必须提供 `evidence`。
 - 如果 gate 声明 `idl_impact.impact = "no"`，必须提供 `idl_impact.na_reason`。
 

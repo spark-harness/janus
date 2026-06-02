@@ -20,6 +20,7 @@ const (
 	VerifyInvalidWaiver   = 4
 	VerifyStaleInput      = 5
 	VerifyEvidenceFailure = 6
+	VerifyBranchPolicy    = 7
 )
 
 type VerifyError struct {
@@ -31,7 +32,11 @@ func (e *VerifyError) Error() string {
 	return strings.Join(e.Problems, "\n")
 }
 
-func Verify(report *Report, root string, now time.Time) error {
+type VerifyOptions struct {
+	TicketID string
+}
+
+func Verify(report *Report, root string, now time.Time, options VerifyOptions) error {
 	if err := Validate(report); err != nil {
 		return &VerifyError{Code: VerifyInvalid, Problems: []string{err.Error()}}
 	}
@@ -41,6 +46,9 @@ func Verify(report *Report, root string, now time.Time) error {
 	}
 	if problems := checkArtifacts(root, report.Inputs, false); len(problems) > 0 {
 		return &VerifyError{Code: VerifyStaleInput, Problems: problems}
+	}
+	if problems := checkRepoBranches(report.Repos, options.TicketID); len(problems) > 0 {
+		return &VerifyError{Code: VerifyBranchPolicy, Problems: problems}
 	}
 	if report.Result == ResultBlocked {
 		return &VerifyError{Code: VerifyBlocked, Problems: []string{"gate result is BLOCKED"}}
@@ -58,6 +66,40 @@ func Verify(report *Report, root string, now time.Time) error {
 	}
 
 	return nil
+}
+
+func checkRepoBranches(repos []Repo, ticketID string) []string {
+	if len(repos) == 0 {
+		return nil
+	}
+
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return []string{"ticket-id is required when gate report includes repos"}
+	}
+
+	var problems []string
+	var expectedBranch string
+	for i, repo := range repos {
+		name := strings.TrimSpace(repo.Name)
+		branch := strings.TrimSpace(repo.Branch)
+		if name == "" {
+			name = fmt.Sprintf("repos[%d]", i)
+		}
+		if branch == "" {
+			problems = append(problems, fmt.Sprintf("%s branch is required", name))
+			continue
+		}
+		if expectedBranch == "" {
+			expectedBranch = branch
+		} else if branch != expectedBranch {
+			problems = append(problems, fmt.Sprintf("%s branch %q does not match %q", name, branch, expectedBranch))
+		}
+		if !strings.Contains(strings.ToLower(branch), strings.ToLower(ticketID)) {
+			problems = append(problems, fmt.Sprintf("%s branch %q does not contain ticket-id %q", name, branch, ticketID))
+		}
+	}
+	return problems
 }
 
 func checkWaiverFresh(waiver Waiver, now time.Time) []string {

@@ -20,6 +20,7 @@ const (
 	ExitInvalidWaiver   = 4
 	ExitStaleInput      = 5
 	ExitEvidenceFailure = 6
+	ExitBranchPolicy    = 7
 
 	Version = "0.1.0"
 )
@@ -75,6 +76,7 @@ func runGateVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("gate verify", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	input := flags.String("input", "", "gate JSON path")
+	ticketID := flags.String("ticket-id", "", "ticket id for repo branch policy checks")
 	if err := flags.Parse(args); err != nil {
 		return ExitInvalid
 	}
@@ -93,7 +95,7 @@ func runGateVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
 		return ExitMissing
 	}
-	if err := gate.Verify(report, root, now()); err != nil {
+	if err := gate.Verify(report, root, now(), gate.VerifyOptions{TicketID: *ticketID}); err != nil {
 		return printVerifyError(stderr, err)
 	}
 
@@ -195,6 +197,7 @@ func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int
 	flags.SetOutput(stderr)
 	requirementID := flags.String("requirement", "", "requirement id")
 	target := flags.String("target", "", "verification target")
+	ticketID := flags.String("ticket-id", "", "ticket id for repo branch policy checks")
 	if err := flags.Parse(args); err != nil {
 		return ExitInvalid
 	}
@@ -209,7 +212,7 @@ func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
 		return ExitMissing
 	}
-	if err := requirement.Verify(root, *requirementID, *target, now()); err != nil {
+	if err := requirement.Verify(root, *requirementID, *target, now(), requirement.VerifyOptions{TicketID: *ticketID}); err != nil {
 		return printRequirementVerifyError(stderr, err)
 	}
 
@@ -221,8 +224,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
 	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
-	fmt.Fprintln(w, "  janus gate verify --input <gate.json>")
-	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge")
+	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
+	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
 	fmt.Fprintln(w, "  janus version")
 }
@@ -231,12 +234,12 @@ func printGateUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
 	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
-	fmt.Fprintln(w, "  janus gate verify --input <gate.json>")
+	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
 }
 
 func printRequirementUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge")
+	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 }
 
 func readGateFile(path string, stderr io.Writer) (*gate.Report, int) {

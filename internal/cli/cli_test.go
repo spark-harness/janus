@@ -58,7 +58,7 @@ func TestRunVersion(t *testing.T) {
 
 func TestGateValidateValidFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "3.3-design-review.gate.json")
+	path := filepath.Join(dir, "design-review.gate.json")
 	if err := os.WriteFile(path, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestGateValidateMissingFile(t *testing.T) {
 
 func TestGateValidateInvalidFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "3.3-design-review.gate.json")
+	path := filepath.Join(dir, "design-review.gate.json")
 	if err := os.WriteFile(path, []byte(`{"schema_version":"1.0"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +109,8 @@ func TestGateValidateInvalidFile(t *testing.T) {
 
 func TestGateRenderWritesMarkdown(t *testing.T) {
 	dir := t.TempDir()
-	input := filepath.Join(dir, "3.3-design-review.gate.json")
-	output := filepath.Join(dir, "3.3-design-review.md")
+	input := filepath.Join(dir, "design-review.gate.json")
+	output := filepath.Join(dir, "design-review.md")
 	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -126,15 +126,15 @@ func TestGateRenderWritesMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rendered), "Generated from 3.3-design-review.gate.json") {
+	if !strings.Contains(string(rendered), "Generated from design-review.gate.json") {
 		t.Fatalf("expected generated header, got %q", string(rendered))
 	}
 }
 
 func TestGateRenderCheckDetectsDrift(t *testing.T) {
 	dir := t.TempDir()
-	input := filepath.Join(dir, "3.3-design-review.gate.json")
-	output := filepath.Join(dir, "3.3-design-review.md")
+	input := filepath.Join(dir, "design-review.gate.json")
+	output := filepath.Join(dir, "design-review.md")
 	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -156,8 +156,8 @@ func TestGateRenderCheckDetectsDrift(t *testing.T) {
 
 func TestGateRenderCheckPassesWhenCurrent(t *testing.T) {
 	dir := t.TempDir()
-	input := filepath.Join(dir, "3.3-design-review.gate.json")
-	output := filepath.Join(dir, "3.3-design-review.md")
+	input := filepath.Join(dir, "design-review.gate.json")
+	output := filepath.Join(dir, "design-review.md")
 	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestGateVerifyPasses(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeRequirementInput(t, dir, "123456")
-	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	input := filepath.Join(dir, "design-review.gate.json")
 	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -202,11 +202,74 @@ func TestGateVerifyPasses(t *testing.T) {
 	}
 }
 
+func TestGateVerifyRequiresTicketIDWhenReposArePresent(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	input := filepath.Join(dir, "service-repo-check.gate.json")
+	if err := os.WriteFile(input, []byte(gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "verify", "--input", input}, &stdout, &stderr)
+
+	if code != ExitBranchPolicy {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitBranchPolicy, code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ticket-id is required") {
+		t.Fatalf("expected ticket-id output, got %q", stderr.String())
+	}
+}
+
+func TestGateVerifyRejectsRepoBranchMismatch(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	input := filepath.Join(dir, "service-repo-check.gate.json")
+	if err := os.WriteFile(input, []byte(gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T99999")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "verify", "--input", input, "--ticket-id", "T12345"}, &stdout, &stderr)
+
+	if code != ExitBranchPolicy {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitBranchPolicy, code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "does not match") {
+		t.Fatalf("expected branch mismatch output, got %q", stderr.String())
+	}
+}
+
+func TestGateVerifyPassesRepoBranchPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	input := filepath.Join(dir, "service-repo-check.gate.json")
+	if err := os.WriteFile(input, []byte(gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"gate", "verify", "--input", input, "--ticket-id", "T12345"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "verified" {
+		t.Fatalf("expected verified output, got %q", stdout.String())
+	}
+}
+
 func TestGateVerifyReturnsStaleInputCode(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeRequirementInput(t, dir, "changed")
-	input := filepath.Join(dir, "3.3-design-review.gate.json")
+	input := filepath.Join(dir, "design-review.gate.json")
 	if err := os.WriteFile(input, []byte(validGateJSON()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +290,7 @@ func TestRequirementVerifyPasses(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeRequirementInput(t, dir, "123456")
-	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "design-review.gate.json")
 	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +307,27 @@ func TestRequirementVerifyPasses(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "verified" {
 		t.Fatalf("expected verified output, got %q", stdout.String())
+	}
+}
+
+func TestRequirementVerifyUsesRequirementIDForRepoBranchPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeRequirementInput(t, dir, "123456")
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "service-repo-check.gate.json")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "verify", "--requirement", "T12345", "--target", "merge"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
 	}
 }
 
@@ -280,7 +364,7 @@ func TestHookGateDriftCheckPassesWithoutRequirements(t *testing.T) {
 
 func TestHookGateDriftCheckBlocksMissingMarkdown(t *testing.T) {
 	dir := t.TempDir()
-	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "design-review.gate.json")
 	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -305,8 +389,8 @@ func TestHookGateDriftCheckBlocksMissingMarkdown(t *testing.T) {
 
 func TestHookGateDriftCheckPassesRenderedMarkdown(t *testing.T) {
 	dir := t.TempDir()
-	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.gate.json")
-	mdPath := filepath.Join(dir, "requirements", "T12345", "gates", "3.3-design-review.md")
+	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "design-review.gate.json")
+	mdPath := filepath.Join(dir, "requirements", "T12345", "gates", "design-review.md")
 	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +432,7 @@ func validGateJSON() string {
 	return `{
   "schema_version": "1.0",
   "requirement_id": "T12345",
-  "gate_id": "3.3-design-review",
+  "gate_id": "design-review",
   "gate_name": "设计门禁",
   "stage": "3.3",
   "checked_by": "detail-design-quality-reviewer",
@@ -375,4 +459,21 @@ func validGateJSON() string {
   },
   "decision": "允许进入 4.1 任务拆分。"
 }`
+}
+
+func gateJSONWithRepos(harnessBranch string, businessBranch string) string {
+	repos := `  "repos": [
+    {
+      "name": "harness-repo",
+      "branch": "` + harnessBranch + `",
+      "commit": "abc123"
+    },
+    {
+      "name": "business-repo",
+      "branch": "` + businessBranch + `",
+      "commit": "def456"
+    }
+  ],
+`
+	return strings.Replace(validGateJSON(), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
 }
