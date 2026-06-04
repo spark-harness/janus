@@ -10,9 +10,9 @@ func Render(report *Report, inputPath string) string {
 	var b strings.Builder
 	source := filepath.Base(inputPath)
 
+	writeMetadata(&b, report)
 	fmt.Fprintf(&b, "<!-- Generated from %s. Do not edit blocking fields here. -->\n\n", source)
 	fmt.Fprintf(&b, "# %s\n\n", report.GateName)
-	writeMetadata(&b, report)
 	writeDecision(&b, report)
 	writeInputs(&b, report.Inputs)
 	writeChecklist(&b, report.Checklist)
@@ -24,15 +24,16 @@ func Render(report *Report, inputPath string) string {
 }
 
 func writeMetadata(b *strings.Builder, report *Report) {
-	fmt.Fprintln(b, "## 元数据")
-	fmt.Fprintln(b)
-	fmt.Fprintf(b, "- Requirement: `%s`\n", report.RequirementID)
-	fmt.Fprintf(b, "- Gate: `%s`\n", report.GateID)
-	fmt.Fprintf(b, "- Stage: `%s`\n", report.Stage)
-	fmt.Fprintf(b, "- Checked by: `%s`\n", report.CheckedBy)
-	fmt.Fprintf(b, "- Checked at: `%s`\n", report.CheckedAt)
-	fmt.Fprintf(b, "- Result: `%s`\n", report.Result)
-	fmt.Fprintf(b, "- Blocks next stage: `%t`\n", report.BlocksNextStage)
+	fmt.Fprintln(b, "---")
+	fmt.Fprintf(b, "requirement_id: %s\n", yamlQuote(report.RequirementID))
+	fmt.Fprintf(b, "gate_id: %s\n", yamlQuote(report.GateID))
+	fmt.Fprintf(b, "gate_name: %s\n", yamlQuote(report.GateName))
+	fmt.Fprintf(b, "stage: %s\n", yamlQuote(report.Stage))
+	fmt.Fprintf(b, "checked_by: %s\n", yamlQuote(report.CheckedBy))
+	fmt.Fprintf(b, "checked_at: %s\n", yamlQuote(report.CheckedAt))
+	fmt.Fprintf(b, "result: %s\n", yamlQuote(report.Result))
+	fmt.Fprintf(b, "blocks_next_stage: %t\n", report.BlocksNextStage)
+	fmt.Fprintln(b, "---")
 	fmt.Fprintln(b)
 }
 
@@ -144,4 +145,10 @@ func writeArtifactsTable(b *strings.Builder, artifacts []Artifact) {
 
 func escapeTable(value string) string {
 	return strings.ReplaceAll(value, "|", "\\|")
+}
+
+func yamlQuote(value string) string {
+	escaped := strings.ReplaceAll(value, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	return "\"" + escaped + "\""
 }
