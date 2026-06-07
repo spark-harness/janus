@@ -90,7 +90,80 @@ janus requirement verify \
   --target merge
 ```
 
-第一版 `merge` 目标使用这个规则：
+### 需求生命周期命令
+
+创建需求目录：
+
+```sh
+janus requirement new T12345 \
+  --title "Mobile Code Register/Login" \
+  --owner "Harness Team"
+```
+
+`new` 会创建 `requirements/<id>/`，复制需求、影响面、设计和任务模板，并初始化 `gates/`、`reviews/`、`evidence/` 目录。`README.md` 会记录 `current_stage: "1"`。
+
+查看当前状态：
+
+```sh
+janus requirement status T12345
+```
+
+`status` 会检查生命周期产物、四道门禁、输入 hash、证据 hash 和 Markdown 渲染漂移，并给出下一步动作。
+
+生成指定门禁报告：
+
+```sh
+janus requirement gate-check \
+  --requirement T12345 \
+  --gate requirement-review
+```
+
+支持的 gate id：
+
+- `requirement-review`
+- `design-review`
+- `dev-entry`
+- `service-repo-check`
+
+`gate-check` 会生成 `requirements/<id>/gates/<gate-id>.gate.json`，并同步渲染 Markdown 审计视图。当前实现只做确定性机器检查；即使机器检查通过，只要没有人工批准记录，顶层结果仍为 `BLOCKED`。
+
+人工审批状态保留在对应 Markdown 的 front matter 中：
+
+- `requirement-review` 读取 `requirements/<id>/requirement.md`。
+- `design-review` 读取 `requirements/<id>/design.md`。
+- `dev-entry` 继续读取结构化的 `tasks.json`，当前不从 Markdown 自动放行。
+- `service-repo-check` 当前不从 Markdown 自动放行。
+
+`requirement-review` 的批准字段示例：
+
+```yaml
+---
+requirement_review_status: "approved"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "需求定义通过，可以进入设计阶段。"
+---
+```
+
+`design-review` 使用同样字段，但状态字段为 `design_review_status: "approved"`。Janus 会把 Markdown 审批源和输入文件 hash 固化到 gate JSON 快照中；后续输入文件变化会让 gate 变为 stale。
+
+推进阶段：
+
+```sh
+janus requirement next --requirement T12345
+```
+
+`next` 根据 `current_stage` 找到必需门禁，运行门禁验证，通过后更新 `README.md` 的 `current_stage`。缺失门禁、过期 hash、`BLOCKED` 门禁都会阻塞推进。
+
+合并前总体验证：
+
+```sh
+janus requirement verify \
+  --requirement T12345 \
+  --target merge
+```
+
+`merge` 目标使用这个规则：
 
 - 查找 `requirements/<requirement-id>/gates/*.gate.json`。
 - 至少必须存在一个 gate JSON。

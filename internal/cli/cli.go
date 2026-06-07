@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"janus/internal/gate"
@@ -183,6 +184,14 @@ func runRequirement(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "new":
+		return runRequirementNew(args[1:], stdout, stderr)
+	case "status":
+		return runRequirementStatus(args[1:], stdout, stderr)
+	case "gate-check":
+		return runRequirementGateCheck(args[1:], stdout, stderr)
+	case "next":
+		return runRequirementNext(args[1:], stdout, stderr)
 	case "verify":
 		return runRequirementVerify(args[1:], stdout, stderr)
 	default:
@@ -190,6 +199,141 @@ func runRequirement(args []string, stdout io.Writer, stderr io.Writer) int {
 		printRequirementUsage(stderr)
 		return ExitInvalid
 	}
+}
+
+func runRequirementNew(args []string, stdout io.Writer, stderr io.Writer) int {
+	args = normalizeRequirementPositional(args, "title", "owner")
+	flags := flag.NewFlagSet("requirement new", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	title := flags.String("title", "", "requirement title")
+	owner := flags.String("owner", "", "requirement owner")
+	force := flags.Bool("force", false, "overwrite existing template files")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "requirement new requires exactly one requirement id")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	requirementID := flags.Arg(0)
+	if err := requirement.Create(root, requirementID, requirement.NewOptions{Title: *title, Owner: *owner, Force: *force}, now()); err != nil {
+		return printLifecycleError(stderr, err)
+	}
+	fmt.Fprintf(stdout, "created requirements/%s\n", requirementID)
+	return ExitOK
+}
+
+func runRequirementStatus(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("requirement status", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "requirement status requires exactly one requirement id")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	status, err := requirement.Inspect(root, flags.Arg(0), now())
+	if err != nil {
+		return printLifecycleError(stderr, err)
+	}
+	printRequirementStatus(stdout, status)
+	if len(status.Problems) > 0 {
+		return ExitBlocked
+	}
+	return ExitOK
+}
+
+func runRequirementGateCheck(args []string, stdout io.Writer, stderr io.Writer) int {
+	args = normalizeRequirementPositional(args, "requirement", "gate", "owner")
+	flags := flag.NewFlagSet("requirement gate-check", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requirementID := flags.String("requirement", "", "requirement id")
+	gateID := flags.String("gate", "", "gate id")
+	owner := flags.String("owner", "", "human approval owner")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *requirementID == "" && flags.NArg() == 1 {
+		*requirementID = flags.Arg(0)
+	} else if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "requirement gate-check accepts at most one positional requirement id")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	if *requirementID == "" || *gateID == "" {
+		fmt.Fprintln(stderr, "requirement gate-check requires --requirement and --gate")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	result, err := requirement.RunGateCheck(root, *requirementID, requirement.GateCheckOptions{GateID: *gateID, Owner: *owner, Now: now()})
+	if err != nil {
+		return printLifecycleError(stderr, err)
+	}
+	fmt.Fprintf(stdout, "Gate: %s\n", result.Report.GateID)
+	fmt.Fprintf(stdout, "Result: %s\n", result.Report.Result)
+	fmt.Fprintf(stdout, "Source: %s\n", result.JSONPath)
+	fmt.Fprintf(stdout, "Report: %s\n", result.MarkdownPath)
+	fmt.Fprintf(stdout, "Reason: %s\n", result.Report.Decision)
+	if result.Report.Result == gate.ResultBlocked {
+		return ExitBlocked
+	}
+	return ExitOK
+}
+
+func runRequirementNext(args []string, stdout io.Writer, stderr io.Writer) int {
+	args = normalizeRequirementPositional(args, "requirement", "ticket-id")
+	flags := flag.NewFlagSet("requirement next", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requirementID := flags.String("requirement", "", "requirement id")
+	ticketID := flags.String("ticket-id", "", "ticket id for repo branch policy checks")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *requirementID == "" && flags.NArg() == 1 {
+		*requirementID = flags.Arg(0)
+	} else if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "requirement next accepts at most one positional requirement id")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	if *requirementID == "" {
+		fmt.Fprintln(stderr, "requirement next requires --requirement")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	result, err := requirement.Advance(root, *requirementID, now(), *ticketID)
+	if err != nil {
+		return printLifecycleError(stderr, err)
+	}
+	if result.GateID == "" {
+		fmt.Fprintf(stdout, "advanced %s from %s to %s\n", result.RequirementID, result.PreviousStage, result.CurrentStage)
+	} else {
+		fmt.Fprintf(stdout, "advanced %s from %s to %s via %s\n", result.RequirementID, result.PreviousStage, result.CurrentStage, result.GateID)
+	}
+	return ExitOK
 }
 
 func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -225,6 +369,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
 	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
 	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
+	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
+	fmt.Fprintln(w, "  janus requirement status <id>")
+	fmt.Fprintln(w, "  janus requirement gate-check --requirement <id> --gate <gate-id> [--owner <owner>]")
+	fmt.Fprintln(w, "  janus requirement next --requirement <id> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
 	fmt.Fprintln(w, "  janus version")
@@ -239,6 +387,10 @@ func printGateUsage(w io.Writer) {
 
 func printRequirementUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
+	fmt.Fprintln(w, "  janus requirement status <id>")
+	fmt.Fprintln(w, "  janus requirement gate-check --requirement <id> --gate <gate-id> [--owner <owner>]")
+	fmt.Fprintln(w, "  janus requirement next --requirement <id> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 }
 
@@ -307,6 +459,76 @@ func printRequirementVerifyError(stderr io.Writer, err error) int {
 	}
 	fmt.Fprintln(stderr, err)
 	return ExitInvalid
+}
+
+func printLifecycleError(stderr io.Writer, err error) int {
+	var lifecycleErr *requirement.LifecycleError
+	if errors.As(err, &lifecycleErr) {
+		for _, problem := range lifecycleErr.Problems {
+			fmt.Fprintf(stderr, "- %s\n", problem)
+		}
+		return lifecycleErr.Code
+	}
+	return printRequirementVerifyError(stderr, err)
+}
+
+func printRequirementStatus(stdout io.Writer, status *requirement.Status) {
+	fmt.Fprintf(stdout, "Requirement: %s\n", status.RequirementID)
+	fmt.Fprintf(stdout, "Current Stage: %s\n", status.CurrentStage)
+	fmt.Fprintln(stdout, "Artifacts:")
+	for _, artifact := range status.Artifacts {
+		state := "OK"
+		if !artifact.Exists {
+			state = "MISSING"
+		}
+		fmt.Fprintf(stdout, "  - %s: %s\n", artifact.Path, state)
+	}
+	fmt.Fprintln(stdout, "Gates:")
+	for _, gateStatus := range status.Gates {
+		state := "MISSING"
+		if gateStatus.Exists {
+			state = gateStatus.Result
+			if !gateStatus.Valid {
+				state = "INVALID"
+			} else if gateStatus.Stale || gateStatus.MarkdownStale {
+				state += " (STALE)"
+			}
+		}
+		fmt.Fprintf(stdout, "  - %s [%s]: %s\n", gateStatus.GateID, gateStatus.Stage, state)
+	}
+	if len(status.Problems) > 0 {
+		fmt.Fprintln(stdout, "Problems:")
+		for _, problem := range status.Problems {
+			fmt.Fprintf(stdout, "  - %s\n", problem)
+		}
+	}
+	fmt.Fprintf(stdout, "Next Action: %s\n", status.NextAction)
+}
+
+func normalizeRequirementPositional(args []string, flagNames ...string) []string {
+	known := map[string]bool{}
+	for _, name := range flagNames {
+		known["-"+name] = true
+		known["--"+name] = true
+	}
+	var flagsAndValues []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flagsAndValues = append(flagsAndValues, arg)
+			if strings.Contains(arg, "=") {
+				continue
+			}
+			if known[arg] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flagsAndValues = append(flagsAndValues, args[i+1])
+				i++
+			}
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	return append(flagsAndValues, positional...)
 }
 
 var now = func() time.Time {

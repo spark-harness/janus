@@ -347,6 +347,96 @@ func TestRequirementVerifyRequiresReports(t *testing.T) {
 	}
 }
 
+func TestRequirementNewCreatesLifecycleFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeLifecycleTemplates(t, dir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "new", "SPARK-3", "--title", "Lifecycle Test"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "created requirements/SPARK-3") {
+		t.Fatalf("expected create output, got %q", stdout.String())
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/README.md", `current_stage: "1"`)
+}
+
+func TestRequirementStatusReportsProblems(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeLifecycleTemplates(t, dir)
+	code := Run([]string{"requirement", "new", "SPARK-3"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != ExitOK {
+		t.Fatalf("expected new to pass, got %d", code)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code = Run([]string{"requirement", "status", "SPARK-3"}, &stdout, &stderr)
+
+	if code != ExitBlocked {
+		t.Fatalf("expected exit code %d, got %d with stderr %q and stdout %q", ExitBlocked, code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Current Stage: 1") {
+		t.Fatalf("expected status output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "requirement-review") {
+		t.Fatalf("expected gate status output, got %q", stdout.String())
+	}
+}
+
+func TestRequirementGateCheckWritesReport(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeLifecycleTemplates(t, dir)
+	code := Run([]string{"requirement", "new", "SPARK-3"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != ExitOK {
+		t.Fatalf("expected new to pass, got %d", code)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code = Run([]string{"requirement", "gate-check", "--requirement", "SPARK-3", "--gate", "requirement-review"}, &stdout, &stderr)
+
+	if code != ExitBlocked {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitBlocked, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Result: BLOCKED") {
+		t.Fatalf("expected blocked output, got %q", stdout.String())
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/gates/requirement-review.gate.json", `"gate_id": "requirement-review"`)
+}
+
+func TestRequirementNextBlocksOnMissingGate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeLifecycleTemplates(t, dir)
+	code := Run([]string{"requirement", "new", "SPARK-3"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != ExitOK {
+		t.Fatalf("expected new to pass, got %d", code)
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/README.md", `current_stage: "1"`)
+	code = Run([]string{"requirement", "next", "--requirement", "SPARK-3"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != ExitOK {
+		t.Fatalf("expected stage 1 next to pass, got %d", code)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code = Run([]string{"requirement", "next", "--requirement", "SPARK-3"}, &stdout, &stderr)
+
+	if code != ExitMissing {
+		t.Fatalf("expected exit code %d, got %d with stderr %q and stdout %q", ExitMissing, code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "missing file") {
+		t.Fatalf("expected missing gate output, got %q", stderr.String())
+	}
+}
+
 func TestHookGateDriftCheckPassesWithoutRequirements(t *testing.T) {
 	dir := t.TempDir()
 
@@ -476,4 +566,90 @@ func gateJSONWithRepos(harnessBranch string, businessBranch string) string {
   ],
 `
 	return strings.Replace(validGateJSON(), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
+}
+
+func writeLifecycleTemplates(t *testing.T, root string) {
+	t.Helper()
+	templateRoot := filepath.Join(root, "context", "harness-framework", "templates")
+	if err := os.MkdirAll(templateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"requirement.md": `---
+requirement_id: ""
+owner: ""
+status: "Draft"
+created_at: ""
+related_branch: ""
+---
+
+# {Requirement Title}
+
+## Background
+## Goals
+## Non-Goals
+## Acceptance Criteria
+`,
+		"impact-analysis.md": `---
+requirement_id: ""
+analyst: ""
+status: "Draft"
+updated_at: ""
+---
+
+# Impact Analysis
+
+## Affected Services
+## API / Contract Impact
+## Rollout And Rollback
+`,
+		"design.md": `---
+requirement_id: ""
+owner: ""
+status: "Draft"
+updated_at: ""
+---
+
+# Design
+
+## Requirement Traceability
+## Affected Services
+## API / Contract Design
+## Rollout And Rollback
+`,
+		"tasks.json": `{
+  "requirement_id": "",
+  "status": "draft",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": [],
+      "acceptance": ["AC1"],
+      "status": "todo"
+    }
+  ]
+}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(templateRoot, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertCLIFileContains(t *testing.T, root string, relativePath string, want string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relativePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), want) {
+		t.Fatalf("expected %s to contain %q, got %q", relativePath, want, string(content))
+	}
 }
