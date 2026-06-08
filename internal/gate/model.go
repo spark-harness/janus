@@ -17,6 +17,13 @@ const (
 	ResultWaived  = "WAIVED"
 )
 
+var resultValues = []string{
+	ResultPass,
+	ResultBlocked,
+	ResultWarn,
+	ResultWaived,
+}
+
 type Report struct {
 	SchemaVersion   string          `json:"schema_version"`
 	RequirementID   string          `json:"requirement_id"`
@@ -165,7 +172,7 @@ func validateResult(problems *[]string, report *Report) {
 		}
 	default:
 		if report.Result != "" {
-			*problems = append(*problems, "result must be PASS, BLOCKED, WARN, or WAIVED")
+			*problems = append(*problems, "result must be "+resultValuesText())
 		}
 	}
 
@@ -226,12 +233,8 @@ func validateChecklist(problems *[]string, checklist []ChecklistItem) {
 	for i, item := range checklist {
 		requireString(problems, fmt.Sprintf("checklist[%d].item", i), item.Item)
 		requireString(problems, fmt.Sprintf("checklist[%d].result", i), item.Result)
-		if item.Result != "" {
-			switch item.Result {
-			case ResultPass, ResultBlocked, ResultWarn, ResultWaived:
-			default:
-				*problems = append(*problems, fmt.Sprintf("checklist[%d].result must be PASS, BLOCKED, WARN, or WAIVED", i))
-			}
+		if item.Result != "" && !IsResult(item.Result) {
+			*problems = append(*problems, fmt.Sprintf("checklist[%d].result must be %s", i, resultValuesText()))
 		}
 		requireString(problems, fmt.Sprintf("checklist[%d].evidence", i), item.Evidence)
 	}
@@ -257,4 +260,17 @@ func requireString(problems *[]string, field string, value string) {
 	if strings.TrimSpace(value) == "" {
 		*problems = append(*problems, field+" is required")
 	}
+}
+
+func IsResult(value string) bool {
+	for _, allowed := range resultValues {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func resultValuesText() string {
+	return strings.Join(resultValues, ", ")
 }

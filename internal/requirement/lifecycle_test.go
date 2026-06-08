@@ -45,6 +45,33 @@ func TestInspectReportsMissingGateProblems(t *testing.T) {
 	}
 }
 
+func TestInspectReportsInvalidReadmeStatus(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/README.md", `---
+requirement_id: "SPARK-3"
+owner: "Harness Team"
+current_stage: "1"
+status: "reviewed"
+created_at: "2026-06-07"
+---
+
+# SPARK-3
+`)
+
+	status, err := Inspect(root, "SPARK-3", fixedTime())
+
+	if err != nil {
+		t.Fatalf("expected inspect to pass, got %v", err)
+	}
+	if !containsProblem(status.Problems, "requirements/SPARK-3/README.md status 必须是") {
+		t.Fatalf("expected invalid README status problem, got %#v", status.Problems)
+	}
+}
+
 func TestInspectInfersStageWhenReadmeHasNoStage(t *testing.T) {
 	root := t.TempDir()
 	writeHarnessTemplates(t, root)
@@ -283,6 +310,192 @@ decision: "服务仓库检查通过。"
 	}
 }
 
+func TestRunServiceRepoCheckPrefersStructuredIDLImpact(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	writeServiceMatrixWithBusinessRepo(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/impact-analysis.md", `---
+requirement_id: "SPARK-3"
+status: "approved"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "服务仓库检查通过。"
+idl_impact: "no"
+idl_impact_reason: "只复用现有 protobuf IDL，不修改契约。"
+---
+
+# Impact Analysis
+
+## Affected Services
+
+`+"`user-api`"+`
+
+## API / Contract Impact
+
+- Does this change involve protobuf IDL or external contracts:
+- Proto files: idl-repo/proto/user.proto
+
+## Rollout And Rollback
+`)
+	writeApprovedTasks(t, root, "todo")
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateServiceRepoCheck, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to pass, got %v", err)
+	}
+	if result.Report.IDLImpact == nil || result.Report.IDLImpact.Impact != "no" {
+		t.Fatalf("expected structured no idl impact, got %#v", result.Report.IDLImpact)
+	}
+	if result.Report.IDLImpact.NAReason != "只复用现有 protobuf IDL，不修改契约。" {
+		t.Fatalf("expected structured reason, got %q", result.Report.IDLImpact.NAReason)
+	}
+	for _, repo := range result.Report.Repos {
+		if repo.Name == "idl-repo" {
+			t.Fatalf("did not expect idl-repo in repos: %#v", result.Report.Repos)
+		}
+	}
+}
+
+func TestRunServiceRepoCheckRequiresStructuredIDLReason(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	writeServiceMatrixWithBusinessRepo(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/impact-analysis.md", `---
+requirement_id: "SPARK-3"
+status: "approved"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "服务仓库检查通过。"
+idl_impact: "no"
+---
+
+# Impact Analysis
+
+## Affected Services
+
+`+"`user-api`"+`
+
+## API / Contract Impact
+
+- Does this change involve protobuf IDL or external contracts:
+
+## Rollout And Rollback
+`)
+	writeApprovedTasks(t, root, "todo")
+
+	_, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateServiceRepoCheck, Now: fixedTime()})
+
+	if err == nil || !strings.Contains(err.Error(), "idl_impact.na_reason is required") {
+		t.Fatalf("expected missing idl reason validation error, got %v", err)
+	}
+}
+
+func TestRunDevEntryBlocksInvalidLifecycleStatus(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "reviewed",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": [],
+      "acceptance": ["AC1"],
+      "state": "todo"
+    }
+  ]
+}`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateDevEntry, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to write blocked report, got %v", err)
+	}
+	if result.Report.Result != "BLOCKED" {
+		t.Fatalf("expected BLOCKED with invalid lifecycle status, got %s", result.Report.Result)
+	}
+	if !strings.Contains(result.Report.Checklist[len(result.Report.Checklist)-1].Evidence, "requirements/SPARK-3/tasks.json status 必须是") {
+		t.Fatalf("expected invalid status evidence, got %#v", result.Report.Checklist)
+	}
+}
+
+func TestRunRequirementReviewBlocksInvalidMarkdownStatus(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/requirement.md", `---
+requirement_id: "SPARK-3"
+owner: "Harness Team"
+status: "Reviewed"
+created_at: "2026-06-07"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "需求定义通过，可以进入设计阶段。"
+---
+
+# SPARK-3
+
+## Background
+## Goals
+## Non-Goals
+## Acceptance Criteria
+`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateRequirementReview, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to write blocked report, got %v", err)
+	}
+	if result.Report.Result != "BLOCKED" {
+		t.Fatalf("expected BLOCKED with invalid markdown status, got %s", result.Report.Result)
+	}
+	if !strings.Contains(result.Report.Checklist[len(result.Report.Checklist)-1].Evidence, "requirements/SPARK-3/requirement.md status 必须是") {
+		t.Fatalf("expected invalid status evidence, got %#v", result.Report.Checklist)
+	}
+}
+
+func TestRunDevEntryBlocksInvalidTaskState(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeApprovedTasks(t, root, "reviewed")
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateDevEntry, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to write blocked report, got %v", err)
+	}
+	if result.Report.Result != "BLOCKED" {
+		t.Fatalf("expected BLOCKED with invalid task state, got %s", result.Report.Result)
+	}
+	if !strings.Contains(result.Report.Checklist[len(result.Report.Checklist)-1].Evidence, "T1 state 必须是") {
+		t.Fatalf("expected invalid state evidence, got %#v", result.Report.Checklist)
+	}
+}
+
 func TestAdvanceBlocksOnBlockedGate(t *testing.T) {
 	root := t.TempDir()
 	writeHarnessTemplates(t, root)
@@ -379,6 +592,49 @@ updated_at: ""
 	}
 }
 
+func writeServiceMatrixWithBusinessRepo(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".service-matrix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, ".service-matrix/dependencies.yaml", `workspace: ".."
+business_repo: "business-repo"
+idl_repo: "idl-repo"
+services:
+  user-api:
+    repo_path: "{business-repo}/services/backend/user-api"
+    idl_required: false
+`)
+	if err := os.MkdirAll(filepath.Join(root, "..", "business-repo", "services", "backend", "user-api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeApprovedTasks(t *testing.T, root string, state string) {
+	t.Helper()
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "approved",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": ["user-api"],
+      "acceptance": ["AC1"],
+      "state": "`+state+`"
+    }
+  ]
+}`)
+}
+
 func assertFileContains(t *testing.T, root string, relativePath string, want string) {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relativePath)))
@@ -388,6 +644,15 @@ func assertFileContains(t *testing.T, root string, relativePath string, want str
 	if !strings.Contains(string(content), want) {
 		t.Fatalf("expected %s to contain %q, got %q", relativePath, want, string(content))
 	}
+}
+
+func containsProblem(problems []string, want string) bool {
+	for _, problem := range problems {
+		if strings.Contains(problem, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertLifecycleError(t *testing.T, err error) *LifecycleError {

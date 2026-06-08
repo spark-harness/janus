@@ -246,6 +246,10 @@ func Inspect(root string, requirementID string, now time.Time) (*Status, error) 
 			}
 		} else {
 			artifact.Exists = true
+			if problem := artifactStatusProblem(path, artifact.Path); problem != "" {
+				artifact.Problem = problem
+				status.Problems = append(status.Problems, problem)
+			}
 		}
 		status.Artifacts = append(status.Artifacts, artifact)
 	}
@@ -292,6 +296,9 @@ func RunGateCheck(root string, requirementID string, options GateCheckOptions) (
 	idlImpact := inferIDLImpact(root, requirementID)
 	repos := collectRepos(root, def.GateID, idlImpact)
 	approval := readApproval(root, requirementID, def.GateID)
+	if approval.Source != "" && approval.Status != "" && !isLifecycleStatus(approval.Status) {
+		problems = append(problems, fmt.Sprintf("%s status 必须是 %s", approval.Source, lifecycleStatusValuesText()))
+	}
 
 	for _, problem := range problems {
 		checklist = append(checklist, gate.ChecklistItem{
@@ -313,7 +320,7 @@ func RunGateCheck(root string, requirementID string, options GateCheckOptions) (
 	result := gate.ResultBlocked
 	blocksNextStage := true
 	decision := fmt.Sprintf("机器检查完成，但 %s 缺少人工批准，不能放行下一阶段。", def.Name)
-	if len(problems) == 0 && approval.Status == "approved" && approval.ApprovedBy != "" && approval.ApprovedAt != "" && approval.Decision != "" {
+	if len(problems) == 0 && approval.Status == LifecycleStatusApproved && approval.ApprovedBy != "" && approval.ApprovedAt != "" && approval.Decision != "" {
 		result = gate.ResultPass
 		blocksNextStage = false
 		decision = approval.Decision
@@ -460,7 +467,7 @@ func readApproval(root string, requirementID string, gateID string) approval {
 		if json.Unmarshal(content, &tasks) == nil {
 			return approval{
 				Source:     source,
-				Status:     strings.ToLower(tasks.Status),
+				Status:     normalizeLifecycleStatus(tasks.Status),
 				ApprovedBy: tasks.ApprovedBy,
 				ApprovedAt: tasks.ApprovedAt,
 				Decision:   tasks.Decision,
@@ -471,7 +478,7 @@ func readApproval(root string, requirementID string, gateID string) approval {
 	prefix := strings.ReplaceAll(gateID, "-", "_")
 	return approval{
 		Source:     source,
-		Status:     strings.ToLower(firstNonEmpty(frontMatter["status"], frontMatter[prefix+"_status"], frontMatter["gate_status"])),
+		Status:     normalizeLifecycleStatus(firstNonEmpty(frontMatter["status"], frontMatter[prefix+"_status"], frontMatter["gate_status"])),
 		ApprovedBy: firstNonEmpty(frontMatter["approved_by"], frontMatter[prefix+"_approved_by"]),
 		ApprovedAt: firstNonEmpty(frontMatter["approved_at"], frontMatter[prefix+"_approved_at"]),
 		Decision:   firstNonEmpty(frontMatter["decision"], frontMatter[prefix+"_decision"]),
@@ -502,7 +509,7 @@ func approvalBlockingIssue(def gateDef, owner string, approval approval) gate.Bl
 		}
 	}
 	missing := []string{}
-	if approval.Status != "approved" {
+	if approval.Status != LifecycleStatusApproved {
 		missing = append(missing, "status: \"approved\"")
 	}
 	if approval.ApprovedBy == "" {
@@ -552,6 +559,27 @@ func firstNonEmpty(values ...string) string {
 
 func requiredArtifacts() []string {
 	return []string{"README.md", "requirement.md", "impact-analysis.md", "design.md", "tasks.json"}
+}
+
+func artifactStatusProblem(path string, displayPath string) string {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var statusValue string
+	if strings.HasSuffix(path, ".json") {
+		var tasks tasksFile
+		if json.Unmarshal(content, &tasks) != nil {
+			return ""
+		}
+		statusValue = normalizeLifecycleStatus(tasks.Status)
+	} else {
+		statusValue = normalizeLifecycleStatus(parseFrontMatter(string(content))["status"])
+	}
+	if statusValue == "" || isLifecycleStatus(statusValue) {
+		return ""
+	}
+	return fmt.Sprintf("%s status 必须是 %s", displayPath, lifecycleStatusValuesText())
 }
 
 func validateRequirementID(requirementID string) error {
@@ -847,8 +875,11 @@ func checkTasks(root string, requirementID string, problems *[]string) []gate.Ch
 		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Scope) == "" || strings.TrimSpace(task.Title) == "" {
 			taskProblems = append(taskProblems, "任务缺少 id/title/scope")
 		}
-		if strings.TrimSpace(firstNonEmpty(task.State, task.LegacyStatus)) == "" {
+		state := normalizeTaskState(firstNonEmpty(task.State, task.LegacyStatus))
+		if state == "" {
 			taskProblems = append(taskProblems, fmt.Sprintf("%s 缺少 state", task.ID))
+		} else if !isTaskState(state) {
+			taskProblems = append(taskProblems, fmt.Sprintf("%s state 必须是 %s", task.ID, taskStateValuesText()))
 		}
 		if len(task.Acceptance) == 0 {
 			taskProblems = append(taskProblems, fmt.Sprintf("%s 缺少 acceptance", task.ID))
@@ -1096,6 +1127,11 @@ func inferIDLImpact(root string, requirementID string) *gate.IDLImpact {
 		if err != nil {
 			continue
 		}
+		if relative == "impact-analysis.md" {
+			if impact, ok := structuredIDLImpact(string(content)); ok {
+				return impact
+			}
+		}
 		lower := strings.ToLower(string(content))
 		if hasExplicitIDLYes(lower) {
 			return &gate.IDLImpact{Impact: "yes"}
@@ -1115,6 +1151,16 @@ func inferIDLImpact(root string, requirementID string) *gate.IDLImpact {
 		return &gate.IDLImpact{Impact: "no", NAReason: "需求文档明确声明不涉及 protobuf IDL 或外部契约影响。"}
 	}
 	return &gate.IDLImpact{Impact: "no", NAReason: "需求文档未声明 protobuf IDL 或外部契约影响。"}
+}
+
+func structuredIDLImpact(content string) (*gate.IDLImpact, bool) {
+	frontMatter := parseFrontMatter(content)
+	impact := strings.ToLower(strings.TrimSpace(firstNonEmpty(frontMatter["idl_impact"], frontMatter["idl_impact.impact"])))
+	if impact == "" {
+		return nil, false
+	}
+	reason := firstNonEmpty(frontMatter["idl_impact_reason"], frontMatter["idl_impact.na_reason"], frontMatter["idl_impact_na_reason"])
+	return &gate.IDLImpact{Impact: impact, NAReason: reason}, true
 }
 
 func hasExplicitIDLYes(lower string) bool {
