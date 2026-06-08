@@ -64,8 +64,8 @@ requirements/{requirement-id}/gates/{gate-id}.md
 示例：
 
 ```text
-requirements/T12345/gates/3.3-design-review.gate.json
-requirements/T12345/gates/3.3-design-review.md
+requirements/T12345/gates/design-review.gate.json
+requirements/T12345/gates/design-review.md
 ```
 
 ## JSON 数据结构
@@ -78,7 +78,7 @@ requirements/T12345/gates/3.3-design-review.md
 {
   "schema_version": "1.0",
   "requirement_id": "T12345",
-  "gate_id": "3.3-design-review",
+  "gate_id": "design-review",
   "gate_name": "设计门禁",
   "stage": "3.3",
   "checked_by": "detail-design-quality-reviewer",
@@ -150,7 +150,7 @@ Markdown 由 CLI 从 `*.gate.json` 渲染。
 Markdown 顶部必须写入生成声明：
 
 ```markdown
-<!-- Generated from 3.3-design-review.gate.json. Do not edit blocking fields here. -->
+<!-- Generated from design-review.gate.json. Do not edit blocking fields here. -->
 ```
 
 Markdown 可用于：
@@ -174,10 +174,10 @@ Markdown 不用于：
 示例：
 
 ```text
-requirement.md 被修改后，旧的 2.2-requirement-review.gate.json 不能继续放行。
-design.md 被修改后，旧的 3.3-design-review.gate.json 不能继续放行。
-tasks.json 被修改后，旧的 4.2-dev-entry.gate.json 不能继续放行。
-.service-matrix/dependencies.yaml 被修改后，旧的 4.3-service-repo-check.gate.json 不能继续放行。
+requirement.md 被修改后，旧的 requirement-review.gate.json 不能继续放行。
+design.md 被修改后，旧的 design-review.gate.json 不能继续放行。
+tasks.json 被修改后，旧的 dev-entry.gate.json 不能继续放行。
+.service-matrix/dependencies.yaml 被修改后，旧的 service-repo-check.gate.json 不能继续放行。
 ```
 
 ## CLI 命令
@@ -187,7 +187,7 @@ tasks.json 被修改后，旧的 4.2-dev-entry.gate.json 不能继续放行。
 校验门禁 JSON 格式和状态一致性。
 
 ```sh
-janus gate validate requirements/T12345/gates/3.3-design-review.gate.json
+janus gate validate requirements/T12345/gates/design-review.gate.json
 ```
 
 必须检查：
@@ -205,8 +205,8 @@ janus gate validate requirements/T12345/gates/3.3-design-review.gate.json
 
 ```sh
 janus gate render \
-  --input requirements/T12345/gates/3.3-design-review.gate.json \
-  --output requirements/T12345/gates/3.3-design-review.md
+  --input requirements/T12345/gates/design-review.gate.json \
+  --output requirements/T12345/gates/design-review.md
 ```
 
 ### `janus gate render --check`
@@ -215,8 +215,8 @@ janus gate render \
 
 ```sh
 janus gate render --check \
-  --input requirements/T12345/gates/3.3-design-review.gate.json \
-  --output requirements/T12345/gates/3.3-design-review.md
+  --input requirements/T12345/gates/design-review.gate.json \
+  --output requirements/T12345/gates/design-review.md
 ```
 
 如果重新渲染结果和现有 Markdown 不一致，命令失败。
@@ -227,13 +227,16 @@ janus gate render --check \
 
 ```sh
 janus gate verify \
-  --input requirements/T12345/gates/3.3-design-review.gate.json
+  --input requirements/T12345/gates/design-review.gate.json \
+  --ticket-id T12345
 ```
 
 必须检查：
 
 - `validate` 通过。
 - 输入文件 hash 未过期。
+- 当 gate JSON 包含 `repos` 时，必须传入 `--ticket-id`。
+- 当 gate JSON 包含 `repos` 时，所有 `repos[].branch` 必须完全一致，并且分支名必须包含 `--ticket-id`。
 - `result` 不是 `BLOCKED`。
 - `WAIVED` 未过期。
 - 相关证据文件存在且 hash 匹配。
@@ -253,6 +256,7 @@ janus requirement verify \
 - 当前阶段要求的门禁报告存在。
 - 门禁 JSON 未过期。
 - 门禁结果允许继续。
+- 包含 `repos` 的门禁必须通过分支一致性和 ticket id 追溯校验；默认使用 `--requirement` 作为 ticket id，显式传入 `--ticket-id` 时使用显式值。
 - 涉及 IDL 时有证据。
 - 不涉及 IDL 时有 `N/A` 理由。
 
