@@ -127,25 +127,25 @@ janus requirement gate-check \
 
 `gate-check` 会生成 `requirements/<id>/gates/<gate-id>.gate.json`，并同步渲染 Markdown 审计视图。当前实现只做确定性机器检查；即使机器检查通过，只要没有人工批准记录，顶层结果仍为 `BLOCKED`。
 
-人工审批状态保留在对应 Markdown 的 front matter 中：
+人工审批状态保留在对应原始产物中：
 
 - `requirement-review` 读取 `requirements/<id>/requirement.md`。
 - `design-review` 读取 `requirements/<id>/design.md`。
-- `dev-entry` 继续读取结构化的 `tasks.json`，当前不从 Markdown 自动放行。
-- `service-repo-check` 当前不从 Markdown 自动放行。
+- `dev-entry` 读取 `requirements/<id>/tasks.json` 顶层字段。
+- `service-repo-check` 读取 `requirements/<id>/impact-analysis.md`。
 
 `requirement-review` 的批准字段示例：
 
 ```yaml
 ---
-requirement_review_status: "approved"
+status: "approved"
 approved_by: "forest"
 approved_at: "2026-06-07T20:30:00+08:00"
 decision: "需求定义通过，可以进入设计阶段。"
 ---
 ```
 
-`design-review` 使用同样字段，但状态字段为 `design_review_status: "approved"`。Janus 会把 Markdown 审批源和输入文件 hash 固化到 gate JSON 快照中；后续输入文件变化会让 gate 变为 stale。
+`design-review` 和 `service-repo-check` 使用同样字段。`dev-entry` 在 `tasks.json` 顶层使用同名字段。Janus 会把审批源和输入文件 hash 固化到 gate JSON 快照中；后续输入文件变化会让 gate 变为 stale。
 
 推进阶段：
 

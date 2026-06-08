@@ -578,7 +578,7 @@ func writeLifecycleTemplates(t *testing.T, root string) {
 		"requirement.md": `---
 requirement_id: ""
 owner: ""
-status: "Draft"
+status: "draft"
 created_at: ""
 related_branch: ""
 ---
@@ -593,7 +593,7 @@ related_branch: ""
 		"impact-analysis.md": `---
 requirement_id: ""
 analyst: ""
-status: "Draft"
+status: "draft"
 updated_at: ""
 ---
 
@@ -606,7 +606,7 @@ updated_at: ""
 		"design.md": `---
 requirement_id: ""
 owner: ""
-status: "Draft"
+status: "draft"
 updated_at: ""
 ---
 
@@ -631,7 +631,7 @@ updated_at: ""
       },
       "affected_services": [],
       "acceptance": ["AC1"],
-      "status": "todo"
+      "state": "todo"
     }
   ]
 }`,

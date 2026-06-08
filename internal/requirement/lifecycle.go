@@ -106,6 +106,9 @@ type NextResult struct {
 type tasksFile struct {
 	RequirementID string     `json:"requirement_id"`
 	Status        string     `json:"status"`
+	ApprovedBy    string     `json:"approved_by"`
+	ApprovedAt    string     `json:"approved_at"`
+	Decision      string     `json:"decision"`
 	Tasks         []taskItem `json:"tasks"`
 }
 
@@ -116,7 +119,8 @@ type taskItem struct {
 	Trace            taskTrace `json:"trace"`
 	AffectedServices []string  `json:"affected_services"`
 	Acceptance       []string  `json:"acceptance"`
-	Status           string    `json:"status"`
+	State            string    `json:"state"`
+	LegacyStatus     string    `json:"status,omitempty"`
 }
 
 type taskTrace struct {
@@ -451,14 +455,26 @@ func readApproval(root string, requirementID string, gateID string) approval {
 	if err != nil {
 		return approval{Source: source}
 	}
+	if strings.HasSuffix(source, ".json") {
+		var tasks tasksFile
+		if json.Unmarshal(content, &tasks) == nil {
+			return approval{
+				Source:     source,
+				Status:     strings.ToLower(tasks.Status),
+				ApprovedBy: tasks.ApprovedBy,
+				ApprovedAt: tasks.ApprovedAt,
+				Decision:   tasks.Decision,
+			}
+		}
+	}
 	frontMatter := parseFrontMatter(string(content))
 	prefix := strings.ReplaceAll(gateID, "-", "_")
 	return approval{
 		Source:     source,
-		Status:     strings.ToLower(firstNonEmpty(frontMatter[prefix+"_status"], frontMatter["gate_status"])),
-		ApprovedBy: firstNonEmpty(frontMatter[prefix+"_approved_by"], frontMatter["approved_by"]),
-		ApprovedAt: firstNonEmpty(frontMatter[prefix+"_approved_at"], frontMatter["approved_at"]),
-		Decision:   firstNonEmpty(frontMatter[prefix+"_decision"], frontMatter["decision"]),
+		Status:     strings.ToLower(firstNonEmpty(frontMatter["status"], frontMatter[prefix+"_status"], frontMatter["gate_status"])),
+		ApprovedBy: firstNonEmpty(frontMatter["approved_by"], frontMatter[prefix+"_approved_by"]),
+		ApprovedAt: firstNonEmpty(frontMatter["approved_at"], frontMatter[prefix+"_approved_at"]),
+		Decision:   firstNonEmpty(frontMatter["decision"], frontMatter[prefix+"_decision"]),
 	}
 }
 
@@ -468,6 +484,10 @@ func approvalSource(requirementID string, gateID string) string {
 		return filepath.ToSlash(filepath.Join("requirements", requirementID, "requirement.md"))
 	case GateDesignReview:
 		return filepath.ToSlash(filepath.Join("requirements", requirementID, "design.md"))
+	case GateDevEntry:
+		return filepath.ToSlash(filepath.Join("requirements", requirementID, "tasks.json"))
+	case GateServiceRepoCheck:
+		return filepath.ToSlash(filepath.Join("requirements", requirementID, "impact-analysis.md"))
 	default:
 		return ""
 	}
@@ -483,7 +503,7 @@ func approvalBlockingIssue(def gateDef, owner string, approval approval) gate.Bl
 	}
 	missing := []string{}
 	if approval.Status != "approved" {
-		missing = append(missing, strings.ReplaceAll(def.GateID, "-", "_")+"_status: \"approved\"")
+		missing = append(missing, "status: \"approved\"")
 	}
 	if approval.ApprovedBy == "" {
 		missing = append(missing, "approved_by")
@@ -496,7 +516,7 @@ func approvalBlockingIssue(def gateDef, owner string, approval approval) gate.Bl
 	}
 	return gate.BlockingIssue{
 		Issue:          fmt.Sprintf("%s 已完成机器检查，但 %s 缺少合法人工批准字段：%s。", def.Name, approval.Source, strings.Join(missing, ", ")),
-		RequiredAction: fmt.Sprintf("在 %s front matter 中补齐批准字段后重新运行 gate-check。", approval.Source),
+		RequiredAction: fmt.Sprintf("在 %s 中补齐批准字段后重新运行 gate-check。", approval.Source),
 		Owner:          owner,
 	}
 }
@@ -555,7 +575,7 @@ func renderTemplate(content string, requirementID string, title string, owner st
 		`# {Requirement Title}`: "# " + title,
 		`"requirement_id": ""`:  fmt.Sprintf(`"requirement_id": "%s"`, requirementID),
 		`"status": "draft"`:     `"status": "draft"`,
-		`"status": "Draft"`:     `"status": "Draft"`,
+		`"status": "Draft"`:     `"status": "draft"`,
 		`related_branch: ""`:    `related_branch: ""`,
 	}
 	for from, to := range replacements {
@@ -569,7 +589,7 @@ func requirementReadme(requirementID string, title string, owner string, date st
 requirement_id: "%s"
 owner: "%s"
 current_stage: "%s"
-status: "Draft"
+status: "draft"
 created_at: "%s"
 ---
 
@@ -827,6 +847,9 @@ func checkTasks(root string, requirementID string, problems *[]string) []gate.Ch
 		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Scope) == "" || strings.TrimSpace(task.Title) == "" {
 			taskProblems = append(taskProblems, "任务缺少 id/title/scope")
 		}
+		if strings.TrimSpace(firstNonEmpty(task.State, task.LegacyStatus)) == "" {
+			taskProblems = append(taskProblems, fmt.Sprintf("%s 缺少 state", task.ID))
+		}
 		if len(task.Acceptance) == 0 {
 			taskProblems = append(taskProblems, fmt.Sprintf("%s 缺少 acceptance", task.ID))
 		}
@@ -836,9 +859,9 @@ func checkTasks(root string, requirementID string, problems *[]string) []gate.Ch
 	}
 	if len(taskProblems) > 0 {
 		*problems = append(*problems, taskProblems...)
-		checklist = append(checklist, gate.ChecklistItem{Item: "每个任务有范围、验收和追溯来源", Result: gate.ResultBlocked, Evidence: strings.Join(taskProblems, "; ")})
+		checklist = append(checklist, gate.ChecklistItem{Item: "每个任务有状态、范围、验收和追溯来源", Result: gate.ResultBlocked, Evidence: strings.Join(taskProblems, "; ")})
 	} else {
-		checklist = append(checklist, gate.ChecklistItem{Item: "每个任务有范围、验收和追溯来源", Result: gate.ResultPass, Evidence: fmt.Sprintf("%d tasks include scope, acceptance, and trace.", len(tasks.Tasks))})
+		checklist = append(checklist, gate.ChecklistItem{Item: "每个任务有状态、范围、验收和追溯来源", Result: gate.ResultPass, Evidence: fmt.Sprintf("%d tasks include state, scope, acceptance, and trace.", len(tasks.Tasks))})
 	}
 	return checklist
 }
@@ -1066,20 +1089,42 @@ func collectEvidence(root string, requirementID string) []gate.Artifact {
 }
 
 func inferIDLImpact(root string, requirementID string) *gate.IDLImpact {
+	mentionsIDL := false
+	explicitNo := false
 	for _, relative := range []string{"impact-analysis.md", "design.md"} {
 		content, err := os.ReadFile(filepath.Join(root, "requirements", requirementID, relative))
 		if err != nil {
 			continue
 		}
 		lower := strings.ToLower(string(content))
-		if strings.Contains(lower, "protobuf") || strings.Contains(lower, "idl") || strings.Contains(lower, "proto files:") {
-			if strings.Contains(lower, "protobuf idl required: no") && strings.Contains(lower, "does this change involve protobuf idl or external contracts: no") {
-				continue
-			}
+		if hasExplicitIDLYes(lower) {
 			return &gate.IDLImpact{Impact: "yes"}
 		}
+		if hasExplicitIDLNo(lower) {
+			explicitNo = true
+			continue
+		}
+		if strings.Contains(lower, "protobuf") || strings.Contains(lower, "idl") || strings.Contains(lower, "proto files:") {
+			mentionsIDL = true
+		}
+	}
+	if mentionsIDL && !explicitNo {
+		return &gate.IDLImpact{Impact: "yes"}
+	}
+	if explicitNo {
+		return &gate.IDLImpact{Impact: "no", NAReason: "需求文档明确声明不涉及 protobuf IDL 或外部契约影响。"}
 	}
 	return &gate.IDLImpact{Impact: "no", NAReason: "需求文档未声明 protobuf IDL 或外部契约影响。"}
+}
+
+func hasExplicitIDLYes(lower string) bool {
+	return strings.Contains(lower, "protobuf idl required: yes") ||
+		strings.Contains(lower, "does this change involve protobuf idl or external contracts: yes")
+}
+
+func hasExplicitIDLNo(lower string) bool {
+	return strings.Contains(lower, "protobuf idl required: no") ||
+		strings.Contains(lower, "does this change involve protobuf idl or external contracts: no")
 }
 
 func collectRepos(root string, gateID string, idlImpact *gate.IDLImpact) []gate.Repo {

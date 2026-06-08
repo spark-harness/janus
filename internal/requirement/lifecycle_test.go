@@ -95,9 +95,8 @@ func TestRunGateCheckPassesWithMarkdownApproval(t *testing.T) {
 	approvedRequirement := `---
 requirement_id: "SPARK-3"
 owner: "Harness Team"
-status: "Draft"
+status: "approved"
 created_at: "2026-06-07"
-requirement_review_status: "approved"
 approved_by: "forest"
 approved_at: "2026-06-07T20:30:00+08:00"
 decision: "需求定义通过，可以进入设计阶段。"
@@ -122,6 +121,165 @@ decision: "需求定义通过，可以进入设计阶段。"
 	}
 	if result.Report.BlocksNextStage {
 		t.Fatal("expected approved gate not to block next stage")
+	}
+}
+
+func TestRunDevEntryPassesWithTasksApproval(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "approved",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过，可以进入开发阶段。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": [],
+      "acceptance": ["AC1"],
+      "state": "todo"
+    }
+  ]
+}`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateDevEntry, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to pass, got %v", err)
+	}
+	if result.Report.Result != "PASS" {
+		t.Fatalf("expected PASS with tasks approval, got %s", result.Report.Result)
+	}
+	if result.Report.Decision != "任务拆分通过，可以进入开发阶段。" {
+		t.Fatalf("expected tasks decision, got %q", result.Report.Decision)
+	}
+}
+
+func TestRunDevEntryBlocksTaskWithoutState(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "approved",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过，可以进入开发阶段。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": [],
+      "acceptance": ["AC1"]
+    }
+  ]
+}`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateDevEntry, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to write blocked report, got %v", err)
+	}
+	if result.Report.Result != "BLOCKED" {
+		t.Fatalf("expected BLOCKED with missing task state, got %s", result.Report.Result)
+	}
+	if !strings.Contains(result.Report.Checklist[len(result.Report.Checklist)-1].Evidence, "T1 缺少 state") {
+		t.Fatalf("expected missing state evidence, got %#v", result.Report.Checklist)
+	}
+}
+
+func TestRunServiceRepoCheckSkipsIDLRepoWhenImpactExplicitlyNo(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := os.MkdirAll(filepath.Join(root, ".service-matrix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, ".service-matrix/dependencies.yaml", `workspace: ".."
+business_repo: "business-repo"
+idl_repo: "idl-repo"
+services:
+  user-api:
+    repo_path: "{business-repo}/services/backend/user-api"
+    idl_required: false
+`)
+	if err := os.MkdirAll(filepath.Join(root, "..", "business-repo", "services", "backend", "user-api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/impact-analysis.md", `---
+requirement_id: "SPARK-3"
+status: "approved"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "服务仓库检查通过。"
+---
+
+# Impact Analysis
+
+## Affected Services
+
+`+"`user-api`"+`
+
+## API / Contract Impact
+
+- Does this change involve protobuf IDL or external contracts: no
+- Proto files: none
+
+## Rollout And Rollback
+`)
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "approved",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Task",
+      "scope": "Scope",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": ["user-api"],
+      "acceptance": ["AC1"],
+      "state": "todo"
+    }
+  ]
+}`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateServiceRepoCheck, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to pass, got %v", err)
+	}
+	if result.Report.IDLImpact == nil || result.Report.IDLImpact.Impact != "no" {
+		t.Fatalf("expected no idl impact, got %#v", result.Report.IDLImpact)
+	}
+	for _, repo := range result.Report.Repos {
+		if repo.Name == "idl-repo" {
+			t.Fatalf("did not expect idl-repo in repos: %#v", result.Report.Repos)
+		}
 	}
 }
 
@@ -156,7 +314,7 @@ func writeHarnessTemplates(t *testing.T, root string) {
 		"requirement.md": `---
 requirement_id: ""
 owner: ""
-status: "Draft"
+status: "draft"
 created_at: ""
 related_branch: ""
 ---
@@ -171,7 +329,7 @@ related_branch: ""
 		"impact-analysis.md": `---
 requirement_id: ""
 analyst: ""
-status: "Draft"
+status: "draft"
 updated_at: ""
 ---
 
@@ -184,7 +342,7 @@ updated_at: ""
 		"design.md": `---
 requirement_id: ""
 owner: ""
-status: "Draft"
+status: "draft"
 updated_at: ""
 ---
 
@@ -209,7 +367,7 @@ updated_at: ""
       },
       "affected_services": [],
       "acceptance": ["AC1"],
-      "status": "todo"
+      "state": "todo"
     }
   ]
 }`,
