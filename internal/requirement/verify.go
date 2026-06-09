@@ -61,7 +61,7 @@ func Verify(root string, requirementID string, target string, now time.Time, opt
 		if ticketID == "" {
 			ticketID = requirementID
 		}
-		if err := gate.Verify(report, root, now, gate.VerifyOptions{TicketID: ticketID}); err != nil {
+		if err := gate.Verify(report, root, now, gate.VerifyOptions{TicketID: ticketID, RepoMode: target}); err != nil {
 			var verifyErr *gate.VerifyError
 			if errors.As(err, &verifyErr) {
 				return &VerifyError{Code: verifyErr.Code, Problems: prefixProblems(path, verifyErr.Problems)}

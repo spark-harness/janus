@@ -161,6 +161,22 @@ func TestVerifyAcceptsConsistentRepoBranchesWithTicketID(t *testing.T) {
 	}
 }
 
+func TestVerifyAcceptsMasterBranchesInMergeMode(t *testing.T) {
+	root := writeInputSnapshot(t, "123456")
+	report := validReport()
+	report.Repos = []Repo{
+		{Name: "harness-repo", Branch: "master", Commit: "abc123"},
+		{Name: "business-repo", Branch: "master", Commit: "def456"},
+		{Name: "idl-repo", Branch: "master", Commit: "fed789"},
+	}
+
+	err := Verify(report, root, time.Now(), VerifyOptions{TicketID: "T12345", RepoMode: "merge"})
+
+	if err != nil {
+		t.Fatalf("expected verified report in merge mode, got %v", err)
+	}
+}
+
 func writeInputSnapshot(t *testing.T, content string) string {
 	t.Helper()
 	root := t.TempDir()

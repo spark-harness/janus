@@ -102,6 +102,18 @@ func TestVerifyRequirementRejectsMismatchedRepoBranches(t *testing.T) {
 	}
 }
 
+func TestVerifyRequirementAllowsMasterRepoBranchesForMergeTarget(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("master", "master"))
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	if err != nil {
+		t.Fatalf("expected master repo branches to pass merge verification, got %v", err)
+	}
+}
+
 func writeFile(t *testing.T, root string, relativePath string, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relativePath))

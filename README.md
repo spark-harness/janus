@@ -169,6 +169,7 @@ janus requirement verify \
 - 至少必须存在一个 gate JSON。
 - 每个 gate JSON 都必须通过 `gate verify`。
 - 如果 gate JSON 包含 `repos`，默认使用 `--requirement` 作为 ticket id 校验分支；需要覆盖时可传 `--ticket-id`。
+- 在 `--target merge` 中，`master` 分支被视为已进入合并后校验口径，不再要求分支名包含 ticket id；非 `master` 分支仍必须保持一致并包含 ticket id。
 - 如果 gate 声明 `idl_impact.impact = "yes"`，必须提供 `evidence`。
 - 如果 gate 声明 `idl_impact.impact = "no"`，必须提供 `idl_impact.na_reason`。
 

@@ -34,6 +34,7 @@ func (e *VerifyError) Error() string {
 
 type VerifyOptions struct {
 	TicketID string
+	RepoMode string
 }
 
 func Verify(report *Report, root string, now time.Time, options VerifyOptions) error {
@@ -47,7 +48,7 @@ func Verify(report *Report, root string, now time.Time, options VerifyOptions) e
 	if problems := checkArtifacts(root, report.Inputs, false); len(problems) > 0 {
 		return &VerifyError{Code: VerifyStaleInput, Problems: problems}
 	}
-	if problems := checkRepoBranches(report.Repos, options.TicketID); len(problems) > 0 {
+	if problems := checkRepoBranchesWithMode(report.Repos, options.TicketID, options.RepoMode); len(problems) > 0 {
 		return &VerifyError{Code: VerifyBranchPolicy, Problems: problems}
 	}
 	if report.Result == ResultBlocked {
@@ -69,6 +70,10 @@ func Verify(report *Report, root string, now time.Time, options VerifyOptions) e
 }
 
 func checkRepoBranches(repos []Repo, ticketID string) []string {
+	return checkRepoBranchesWithMode(repos, ticketID, "")
+}
+
+func checkRepoBranchesWithMode(repos []Repo, ticketID string, mode string) []string {
 	if len(repos) == 0 {
 		return nil
 	}
@@ -88,6 +93,9 @@ func checkRepoBranches(repos []Repo, ticketID string) []string {
 		}
 		if branch == "" {
 			problems = append(problems, fmt.Sprintf("%s branch is required", name))
+			continue
+		}
+		if mode == "merge" && branch == "master" {
 			continue
 		}
 		if expectedBranch == "" {
