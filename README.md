@@ -108,7 +108,7 @@ janus requirement new T12345 \
 janus requirement status T12345
 ```
 
-`status` 会检查生命周期产物、四道门禁、输入 hash、证据 hash 和 Markdown 渲染漂移，并给出下一步动作。
+`status` 会检查生命周期产物、阶段门禁、合并就绪门禁、输入 hash、证据 hash 和 Markdown 渲染漂移，并给出下一步动作。
 
 生成指定门禁报告：
 
@@ -124,6 +124,7 @@ janus requirement gate-check \
 - `design-review`
 - `dev-entry`
 - `service-repo-check`
+- `merge-readiness`
 
 `gate-check` 会生成 `requirements/<id>/gates/<gate-id>.gate.json`，并同步渲染 Markdown 审计视图。当前实现只做确定性机器检查；即使机器检查通过，只要没有人工批准记录，顶层结果仍为 `BLOCKED`。
 
@@ -133,6 +134,7 @@ janus requirement gate-check \
 - `design-review` 读取 `requirements/<id>/design.md`。
 - `dev-entry` 读取 `requirements/<id>/tasks.json` 顶层字段。
 - `service-repo-check` 读取 `requirements/<id>/impact-analysis.md`。
+- `merge-readiness` 读取 `requirements/<id>/tasks.json` 顶层字段，并收集 `requirements/<id>/evidence/`。
 
 `requirement-review` 的批准字段示例：
 
@@ -166,14 +168,15 @@ janus requirement verify \
 `merge` 目标使用这个规则：
 
 - 查找 `requirements/<requirement-id>/gates/*.gate.json`。
-- 至少必须存在一个 gate JSON。
+- 必须存在 `requirement-review`、`design-review`、`dev-entry`、`service-repo-check` 和 `merge-readiness` gate JSON。
 - 每个 gate JSON 都必须通过 `gate verify`。
 - 如果 gate JSON 包含 `repos`，默认使用 `--requirement` 作为 ticket id 校验分支；需要覆盖时可传 `--ticket-id`。
 - 在 `--target merge` 中，`master` 分支被视为已进入合并后校验口径，不再要求分支名包含 ticket id；非 `master` 分支仍必须保持一致并包含 ticket id。
-- 如果 gate 声明 `idl_impact.impact = "yes"`，必须提供 `evidence`。
+- 早期阶段 gate 可以声明 `idl_impact.impact = "yes"`，但不要求实现 evidence。
+- 如果 `merge-readiness` 声明 `idl_impact.impact = "yes"`，必须提供 `evidence`。
 - 如果 gate 声明 `idl_impact.impact = "no"`，必须提供 `idl_impact.na_reason`。
 
-后续如果新增必需 gate 清单或阶段配置，`requirement verify` 应改为读取配置，而不是只验证已发现的 gate 文件。
+后续如果新增必需 gate 清单或阶段配置，`requirement verify` 应改为读取配置，而不是硬编码 gate 列表。
 
 ### Codex Hook 输出
 

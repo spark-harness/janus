@@ -42,6 +42,7 @@ func Verify(root string, requirementID string, target string, now time.Time, opt
 		return &VerifyError{Code: gate.VerifyMissing, Problems: []string{fmt.Sprintf("missing gate reports for requirement %s", requirementID)}}
 	}
 
+	reportsByGateID := map[string]*gate.Report{}
 	for _, path := range gatePaths {
 		report, err := readGate(path)
 		if err != nil {
@@ -54,9 +55,7 @@ func Verify(root string, requirementID string, target string, now time.Time, opt
 		if report.RequirementID != requirementID {
 			return &VerifyError{Code: gate.VerifyInvalid, Problems: []string{fmt.Sprintf("%s has requirement_id %s", path, report.RequirementID)}}
 		}
-		if err := checkIDLPolicy(report); err != nil {
-			return err
-		}
+		reportsByGateID[report.GateID] = report
 		ticketID := strings.TrimSpace(options.TicketID)
 		if ticketID == "" {
 			ticketID = requirementID
@@ -68,6 +67,13 @@ func Verify(root string, requirementID string, target string, now time.Time, opt
 			}
 			return &VerifyError{Code: gate.VerifyInvalid, Problems: []string{err.Error()}}
 		}
+	}
+
+	if err := checkRequiredMergeGates(reportsByGateID); err != nil {
+		return err
+	}
+	if err := checkIDLPolicy(reportsByGateID); err != nil {
+		return err
 	}
 
 	return nil
@@ -90,12 +96,27 @@ func readGate(path string) (*gate.Report, error) {
 	return report, nil
 }
 
-func checkIDLPolicy(report *gate.Report) error {
-	if report.IDLImpact == nil {
+func checkRequiredMergeGates(reports map[string]*gate.Report) error {
+	required := []string{GateRequirementReview, GateDesignReview, GateDevEntry, GateServiceRepoCheck, GateMergeReadiness}
+	var missing []string
+	for _, gateID := range required {
+		if _, ok := reports[gateID]; !ok {
+			missing = append(missing, gateID)
+		}
+	}
+	if len(missing) > 0 {
+		return &VerifyError{Code: gate.VerifyMissing, Problems: []string{"missing required merge gates: " + strings.Join(missing, ", ")}}
+	}
+	return nil
+}
+
+func checkIDLPolicy(reports map[string]*gate.Report) error {
+	mergeReadiness := reports[GateMergeReadiness]
+	if mergeReadiness == nil || mergeReadiness.IDLImpact == nil {
 		return nil
 	}
-	if report.IDLImpact.Impact == "yes" && len(report.Evidence) == 0 {
-		return &VerifyError{Code: gate.VerifyEvidenceFailure, Problems: []string{fmt.Sprintf("%s declares IDL impact but has no evidence", report.GateID)}}
+	if mergeReadiness.IDLImpact.Impact == "yes" && !hasIDLEvidence(mergeReadiness.Evidence) {
+		return &VerifyError{Code: gate.VerifyEvidenceFailure, Problems: []string{fmt.Sprintf("%s declares IDL impact but has no Buf, IDL, or contract evidence", mergeReadiness.GateID)}}
 	}
 	return nil
 }

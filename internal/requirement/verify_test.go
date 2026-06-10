@@ -1,6 +1,8 @@
 package requirement
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +12,7 @@ import (
 
 func TestVerifyRequirementPassesAllGates(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
-	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", validGateJSON())
+	writeStandardMergeGates(t, root, "T12345")
 
 	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
@@ -44,11 +45,24 @@ func TestVerifyRequirementRejectsMismatchedRequirementID(t *testing.T) {
 	}
 }
 
-func TestVerifyRequirementRequiresIDLEvidenceWhenImpacted(t *testing.T) {
+func TestVerifyRequirementAllowsEarlyIDLImpactWithoutEvidence(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
-	report := strings.Replace(validGateJSON(), `"decision": "允许进入 4.1 任务拆分。"`, `"idl_impact": {"impact": "yes"}, "decision": "允许进入 4.1 任务拆分。"`, 1)
+	writeStandardMergeGates(t, root, "T12345")
+	report := strings.Replace(gateJSON("T12345", GateDesignReview), `"decision": "允许进入下一阶段。"`, `"idl_impact": {"impact": "yes"}, "decision": "允许进入下一阶段。"`, 1)
 	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", report)
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	if err != nil {
+		t.Fatalf("expected early IDL impact without evidence to pass, got %v", err)
+	}
+}
+
+func TestVerifyRequirementRequiresIDLEvidenceOnMergeReadiness(t *testing.T) {
+	root := t.TempDir()
+	writeStandardMergeGates(t, root, "T12345")
+	report := strings.Replace(gateJSON("T12345", GateMergeReadiness), `"decision": "允许进入下一阶段。"`, `"idl_impact": {"impact": "yes"}, "decision": "允许进入下一阶段。"`, 1)
+	writeFile(t, root, "requirements/T12345/gates/merge-readiness.gate.json", report)
 
 	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
@@ -58,9 +72,41 @@ func TestVerifyRequirementRequiresIDLEvidenceWhenImpacted(t *testing.T) {
 	}
 }
 
+func TestVerifyRequirementRequiresContractEvidenceOnMergeReadiness(t *testing.T) {
+	root := t.TempDir()
+	writeStandardMergeGates(t, root, "T12345")
+	writeFile(t, root, "requirements/T12345/evidence/service-tests.md", "ok")
+	report := strings.Replace(gateJSON("T12345", GateMergeReadiness), `"decision": "允许进入下一阶段。"`, `"idl_impact": {"impact": "yes"}, "evidence": [{"path":"requirements/T12345/evidence/service-tests.md","sha256":"`+sha256Of("ok")+`"}], "decision": "允许进入下一阶段。"`, 1)
+	writeFile(t, root, "requirements/T12345/gates/merge-readiness.gate.json", report)
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	verifyErr := assertVerifyError(t, err)
+	if verifyErr.Code != 6 {
+		t.Fatalf("expected code 6, got %d", verifyErr.Code)
+	}
+	if !strings.Contains(verifyErr.Error(), "no Buf, IDL, or contract evidence") {
+		t.Fatalf("expected contract evidence error, got %q", verifyErr.Error())
+	}
+}
+
+func TestVerifyRequirementAllowsContractEvidenceOnMergeReadiness(t *testing.T) {
+	root := t.TempDir()
+	writeStandardMergeGates(t, root, "T12345")
+	writeFile(t, root, "requirements/T12345/evidence/buf-checks.md", "ok")
+	report := strings.Replace(gateJSON("T12345", GateMergeReadiness), `"decision": "允许进入下一阶段。"`, `"idl_impact": {"impact": "yes"}, "evidence": [{"path":"requirements/T12345/evidence/buf-checks.md","sha256":"`+sha256Of("ok")+`"}], "decision": "允许进入下一阶段。"`, 1)
+	writeFile(t, root, "requirements/T12345/gates/merge-readiness.gate.json", report)
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	if err != nil {
+		t.Fatalf("expected requirement verification to pass, got %v", err)
+	}
+}
+
 func TestVerifyRequirementRejectsBlockedGate(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeStandardMergeGates(t, root, "T12345")
 	report := strings.Replace(validGateJSON(), `"result": "PASS"`, `"result": "BLOCKED"`, 1)
 	report = strings.Replace(report, `"blocks_next_stage": false`, `"blocks_next_stage": true`, 1)
 	report = strings.Replace(report, `"blocking_issues": []`, `"blocking_issues": [{"issue":"缺少回滚方案","required_action":"补充回滚策略","owner":"backend"}]`, 1)
@@ -76,7 +122,7 @@ func TestVerifyRequirementRejectsBlockedGate(t *testing.T) {
 
 func TestVerifyRequirementUsesRequirementIDAsDefaultTicketID(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeStandardMergeGates(t, root, "T12345")
 	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345"))
 
 	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
@@ -88,7 +134,7 @@ func TestVerifyRequirementUsesRequirementIDAsDefaultTicketID(t *testing.T) {
 
 func TestVerifyRequirementRejectsMismatchedRepoBranches(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeStandardMergeGates(t, root, "T12345")
 	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T99999"))
 
 	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
@@ -104,13 +150,29 @@ func TestVerifyRequirementRejectsMismatchedRepoBranches(t *testing.T) {
 
 func TestVerifyRequirementAllowsMasterRepoBranchesForMergeTarget(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeStandardMergeGates(t, root, "T12345")
 	writeFile(t, root, "requirements/T12345/gates/service-repo-check.gate.json", gateJSONWithRepos("master", "master"))
 
 	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
 
 	if err != nil {
 		t.Fatalf("expected master repo branches to pass merge verification, got %v", err)
+	}
+}
+
+func TestVerifyRequirementRequiresStandardMergeGates(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "requirements/T12345/requirement.md", "123456")
+	writeFile(t, root, "requirements/T12345/gates/design-review.gate.json", validGateJSON())
+
+	err := Verify(root, "T12345", "merge", time.Now(), VerifyOptions{})
+
+	verifyErr := assertVerifyError(t, err)
+	if verifyErr.Code != 3 {
+		t.Fatalf("expected code 3, got %d", verifyErr.Code)
+	}
+	if !strings.Contains(verifyErr.Error(), "missing required merge gates") {
+		t.Fatalf("expected missing merge gates output, got %q", verifyErr.Error())
 	}
 }
 
@@ -138,10 +200,22 @@ func assertVerifyError(t *testing.T, err error) *VerifyError {
 }
 
 func validGateJSON() string {
+	return gateJSON("T12345", GateDesignReview)
+}
+
+func writeStandardMergeGates(t *testing.T, root string, requirementID string) {
+	t.Helper()
+	writeFile(t, root, "requirements/"+requirementID+"/requirement.md", "123456")
+	for _, gateID := range []string{GateRequirementReview, GateDesignReview, GateDevEntry, GateServiceRepoCheck, GateMergeReadiness} {
+		writeFile(t, root, "requirements/"+requirementID+"/gates/"+gateID+".gate.json", gateJSON(requirementID, gateID))
+	}
+}
+
+func gateJSON(requirementID string, gateID string) string {
 	return `{
   "schema_version": "1.0",
-  "requirement_id": "T12345",
-  "gate_id": "design-review",
+  "requirement_id": "` + requirementID + `",
+  "gate_id": "` + gateID + `",
   "gate_name": "设计门禁",
   "stage": "3.3",
   "checked_by": "detail-design-quality-reviewer",
@@ -166,7 +240,7 @@ func validGateJSON() string {
   "waiver": {
     "required": false
   },
-  "decision": "允许进入 4.1 任务拆分。"
+  "decision": "允许进入下一阶段。"
 }`
 }
 
@@ -184,5 +258,10 @@ func gateJSONWithRepos(harnessBranch string, businessBranch string) string {
     }
   ],
 `
-	return strings.Replace(validGateJSON(), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
+	return strings.Replace(gateJSON("T12345", GateServiceRepoCheck), `  "decision": "允许进入下一阶段。"`, repos+`  "decision": "允许进入下一阶段。"`, 1)
+}
+
+func sha256Of(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }

@@ -23,6 +23,7 @@ const (
 	GateDesignReview      = "design-review"
 	GateDevEntry          = "dev-entry"
 	GateServiceRepoCheck  = "service-repo-check"
+	GateMergeReadiness    = "merge-readiness"
 )
 
 var allGateIDs = []string{
@@ -30,6 +31,7 @@ var allGateIDs = []string{
 	GateDesignReview,
 	GateDevEntry,
 	GateServiceRepoCheck,
+	GateMergeReadiness,
 }
 
 type LifecycleError struct {
@@ -257,13 +259,15 @@ func Inspect(root string, requirementID string, now time.Time) (*Status, error) 
 	for _, gateID := range allGateIDs {
 		gateStatus := inspectGate(root, requirementID, gateID, now)
 		status.Gates = append(status.Gates, gateStatus)
-		if len(gateStatus.Problems) > 0 {
-			status.Problems = append(status.Problems, gateStatus.Problems...)
-		}
 	}
 
 	if status.CurrentStage == "" || status.CurrentStage == "1" && hasAnyGate(status.Gates) {
 		status.CurrentStage = inferCurrentStage(status.Gates)
+	}
+	for _, gateStatus := range status.Gates {
+		if gateStatus.Exists && gateAppliesAtStage(status.CurrentStage, gateStatus.GateID) && len(gateStatus.Problems) > 0 {
+			status.Problems = append(status.Problems, gateStatus.Problems...)
+		}
 	}
 	status.NextAction = nextAction(status)
 
@@ -292,7 +296,10 @@ func RunGateCheck(root string, requirementID string, options GateCheckOptions) (
 	var problems []string
 	inputs := collectInputs(root, requirementID, def.Inputs, &problems)
 	checklist := runChecklist(root, requirementID, def.GateID, &problems)
-	evidence := collectEvidence(root, requirementID)
+	var evidence []gate.Artifact
+	if def.GateID == GateMergeReadiness {
+		evidence = collectEvidence(root, requirementID)
+	}
 	idlImpact := inferIDLImpact(root, requirementID)
 	repos := collectRepos(root, def.GateID, idlImpact)
 	approval := readApproval(root, requirementID, def.GateID)
@@ -447,6 +454,18 @@ func gateDefinition(gateID string) (gateDef, bool) {
 		return gateDef{GateID: GateDevEntry, Name: "Dev 进入门禁", Stage: "4.2", CheckedBy: "dev_entry_checker", Inputs: []string{"design.md", "tasks.json"}}, true
 	case GateServiceRepoCheck:
 		return gateDef{GateID: GateServiceRepoCheck, Name: "服务仓库检查门禁", Stage: "4.3", CheckedBy: "service_repo_checker", Inputs: []string{"impact-analysis.md", "design.md", "tasks.json", "../../.service-matrix/dependencies.yaml"}}, true
+	case GateMergeReadiness:
+		return gateDef{GateID: GateMergeReadiness, Name: "合并就绪门禁", Stage: "5.1", CheckedBy: "merge_readiness_checker", Inputs: []string{
+			"requirement.md",
+			"impact-analysis.md",
+			"design.md",
+			"tasks.json",
+			"gates/requirement-review.gate.json",
+			"gates/design-review.gate.json",
+			"gates/dev-entry.gate.json",
+			"gates/service-repo-check.gate.json",
+			"../../.service-matrix/dependencies.yaml",
+		}}, true
 	default:
 		return gateDef{}, false
 	}
@@ -495,6 +514,8 @@ func approvalSource(requirementID string, gateID string) string {
 		return filepath.ToSlash(filepath.Join("requirements", requirementID, "tasks.json"))
 	case GateServiceRepoCheck:
 		return filepath.ToSlash(filepath.Join("requirements", requirementID, "impact-analysis.md"))
+	case GateMergeReadiness:
+		return filepath.ToSlash(filepath.Join("requirements", requirementID, "tasks.json"))
 	default:
 		return ""
 	}
@@ -762,8 +783,11 @@ func nextAction(status *Status) string {
 		}
 	}
 	for _, gateStatus := range status.Gates {
+		if !gateAppliesAtStage(status.CurrentStage, gateStatus.GateID) {
+			continue
+		}
 		if !gateStatus.Exists {
-			return "运行 gate-check 生成下一道缺失门禁。"
+			return "当前阶段完成并批准后，运行 gate-check 生成对应门禁。"
 		}
 		if gateStatus.Stale || gateStatus.MarkdownStale {
 			return "重新运行 gate-check 或 gate render 刷新过期门禁。"
@@ -772,7 +796,56 @@ func nextAction(status *Status) string {
 			return "处理 BLOCKED 门禁或补充人工批准。"
 		}
 	}
+	if stageRank(status.CurrentStage) < stageRank("5") {
+		return "继续当前阶段；满足条件后运行 requirement next。"
+	}
 	return "运行 requirement verify --target merge。"
+}
+
+func gateAppliesAtStage(currentStage string, gateID string) bool {
+	return stageRank(currentStage) >= gateDueRank(gateID)
+}
+
+func gateDueRank(gateID string) int {
+	switch gateID {
+	case GateRequirementReview:
+		return stageRank("2")
+	case GateDesignReview:
+		return stageRank("3")
+	case GateDevEntry:
+		return stageRank("4.2")
+	case GateServiceRepoCheck:
+		return stageRank("4.3")
+	case GateMergeReadiness:
+		return stageRank("5")
+	default:
+		return 999
+	}
+}
+
+func stageRank(stage string) int {
+	switch strings.TrimSpace(stage) {
+	case "", "1":
+		return 10
+	case "2":
+		return 20
+	case "3":
+		return 30
+	case "4.1":
+		return 41
+	case "4.2":
+		return 42
+	case "4.3":
+		return 43
+	case "4.4":
+		return 44
+	case "5":
+		return 50
+	case "5.1":
+		return 51
+	default:
+		return 999
+	}
 }
 
 func collectInputs(root string, requirementID string, relatives []string, problems *[]string) []gate.Artifact {
@@ -822,6 +895,8 @@ func runChecklist(root string, requirementID string, gateID string, problems *[]
 		return checkTasks(root, requirementID, problems)
 	case GateServiceRepoCheck:
 		return checkServiceRepo(root, requirementID, problems)
+	case GateMergeReadiness:
+		return checkMergeReadiness(root, requirementID, problems)
 	default:
 		return nil
 	}
@@ -935,6 +1010,58 @@ func checkServiceRepo(root string, requirementID string, problems *[]string) []g
 		checklist = append(checklist, gate.ChecklistItem{Item: "涉及服务存在且路径可解析", Result: gate.ResultPass, Evidence: strings.Join(affected, ", ")})
 	}
 	return checklist
+}
+
+func checkMergeReadiness(root string, requirementID string, problems *[]string) []gate.ChecklistItem {
+	checklist := []gate.ChecklistItem{}
+	gateProblems := []string{}
+	for _, gateID := range []string{GateRequirementReview, GateDesignReview, GateDevEntry, GateServiceRepoCheck} {
+		reportPath := filepath.Join(root, "requirements", requirementID, "gates", gateID+".gate.json")
+		report, err := readGate(reportPath)
+		if err != nil {
+			gateProblems = append(gateProblems, fmt.Sprintf("%s missing or invalid", gateID))
+			continue
+		}
+		if report.Result == gate.ResultBlocked {
+			gateProblems = append(gateProblems, fmt.Sprintf("%s is BLOCKED", gateID))
+		}
+	}
+	if len(gateProblems) > 0 {
+		*problems = append(*problems, gateProblems...)
+		checklist = append(checklist, gate.ChecklistItem{Item: "阶段门禁已通过", Result: gate.ResultBlocked, Evidence: strings.Join(gateProblems, "; ")})
+	} else {
+		checklist = append(checklist, gate.ChecklistItem{Item: "阶段门禁已通过", Result: gate.ResultPass, Evidence: "requirement-review, design-review, dev-entry, and service-repo-check are present and not BLOCKED."})
+	}
+
+	evidence := collectEvidence(root, requirementID)
+	if len(evidence) == 0 {
+		*problems = append(*problems, "merge-readiness 缺少 evidence")
+		checklist = append(checklist, gate.ChecklistItem{Item: "实现证据已记录", Result: gate.ResultBlocked, Evidence: "requirements/" + requirementID + "/evidence is empty or missing"})
+	} else {
+		checklist = append(checklist, gate.ChecklistItem{Item: "实现证据已记录", Result: gate.ResultPass, Evidence: fmt.Sprintf("%d evidence files recorded.", len(evidence))})
+	}
+
+	idlImpact := inferIDLImpact(root, requirementID)
+	if idlImpact != nil && idlImpact.Impact == "yes" {
+		if hasIDLEvidence(evidence) {
+			checklist = append(checklist, gate.ChecklistItem{Item: "IDL 证据已记录", Result: gate.ResultPass, Evidence: "Buf or contract evidence exists."})
+		} else {
+			*problems = append(*problems, "IDL impact 为 yes 但缺少 Buf 或契约检查证据")
+			checklist = append(checklist, gate.ChecklistItem{Item: "IDL 证据已记录", Result: gate.ResultBlocked, Evidence: "Expected evidence filename to include buf, idl, or contract."})
+		}
+	}
+
+	return checklist
+}
+
+func hasIDLEvidence(evidence []gate.Artifact) bool {
+	for _, artifact := range evidence {
+		name := strings.ToLower(filepath.Base(artifact.Path))
+		if strings.Contains(name, "buf") || strings.Contains(name, "idl") || strings.Contains(name, "contract") {
+			return true
+		}
+	}
+	return false
 }
 
 func readServiceMatrix(root string) (serviceMatrix, []string) {

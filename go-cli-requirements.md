@@ -253,11 +253,13 @@ janus requirement verify \
 
 `--target merge` 至少应检查：
 
-- 当前阶段要求的门禁报告存在。
+- 标准阶段门禁报告存在：`requirement-review`、`design-review`、`dev-entry`、`service-repo-check`。
+- 最终合并门禁报告存在：`merge-readiness`。
 - 门禁 JSON 未过期。
 - 门禁结果允许继续。
 - 包含 `repos` 的门禁必须通过分支一致性和 ticket id 追溯校验；默认使用 `--requirement` 作为 ticket id，显式传入 `--ticket-id` 时使用显式值。
-- 涉及 IDL 时有证据。
+- 早期阶段门禁只声明 IDL 影响和设计/任务/仓库准备状态，不要求实现证据。
+- 涉及 IDL 时，`merge-readiness` 必须有 Buf 或契约检查证据。
 - 不涉及 IDL 时有 `N/A` 理由。
 
 ## 退出码
@@ -350,7 +352,8 @@ jobs:
 - If `result = WARN`, then `blocks_next_stage` must be `false` and warnings must include follow-up actions.
 - If `result = BLOCKED`, then `blocks_next_stage` must be `true` and blocking issues must be non-empty.
 - If `result = WAIVED`, then waiver reason, approver, approval time, expiry time, and follow-up issue must be present.
-- If IDL impact is `yes`, then evidence for contract checks must be present.
+- If IDL impact is `yes` on `merge-readiness`, then evidence for contract checks must be present.
+- If IDL impact is `yes` on an earlier stage gate, then the CLI shall not require implementation evidence on that gate.
 - If IDL impact is `no`, then an `N/A` reason must be present.
 
 ## 验收标准

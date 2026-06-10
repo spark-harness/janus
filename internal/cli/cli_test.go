@@ -290,13 +290,7 @@ func TestRequirementVerifyPasses(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeRequirementInput(t, dir, "123456")
-	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "design-review.gate.json")
-	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(gatePath, []byte(validGateJSON()), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeStandardMergeGates(t, dir)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -314,10 +308,8 @@ func TestRequirementVerifyUsesRequirementIDForRepoBranchPolicy(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeRequirementInput(t, dir, "123456")
+	writeStandardMergeGates(t, dir)
 	gatePath := filepath.Join(dir, "requirements", "T12345", "gates", "service-repo-check.gate.json")
-	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(gatePath, []byte(gateJSONWithRepos("feature/user-api/T12345", "feature/user-api/T12345")), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +357,7 @@ func TestRequirementNewCreatesLifecycleFiles(t *testing.T) {
 	assertCLIFileContains(t, dir, "requirements/SPARK-3/README.md", `current_stage: "1"`)
 }
 
-func TestRequirementStatusReportsProblems(t *testing.T) {
+func TestRequirementStatusShowsLifecycleState(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeLifecycleTemplates(t, dir)
@@ -378,8 +370,8 @@ func TestRequirementStatusReportsProblems(t *testing.T) {
 	var stderr bytes.Buffer
 	code = Run([]string{"requirement", "status", "SPARK-3"}, &stdout, &stderr)
 
-	if code != ExitBlocked {
-		t.Fatalf("expected exit code %d, got %d with stderr %q and stdout %q", ExitBlocked, code, stderr.String(), stdout.String())
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q and stdout %q", ExitOK, code, stderr.String(), stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Current Stage: 1") {
 		t.Fatalf("expected status output, got %q", stdout.String())
@@ -519,10 +511,27 @@ func writeRequirementInput(t *testing.T, root string, content string) {
 }
 
 func validGateJSON() string {
+	return gateJSON("design-review")
+}
+
+func writeStandardMergeGates(t *testing.T, root string) {
+	t.Helper()
+	gateDir := filepath.Join(root, "requirements", "T12345", "gates")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, gateID := range []string{"requirement-review", "design-review", "dev-entry", "service-repo-check", "merge-readiness"} {
+		if err := os.WriteFile(filepath.Join(gateDir, gateID+".gate.json"), []byte(gateJSON(gateID)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func gateJSON(gateID string) string {
 	return `{
   "schema_version": "1.0",
   "requirement_id": "T12345",
-  "gate_id": "design-review",
+  "gate_id": "` + gateID + `",
   "gate_name": "设计门禁",
   "stage": "3.3",
   "checked_by": "detail-design-quality-reviewer",
@@ -565,7 +574,7 @@ func gateJSONWithRepos(harnessBranch string, businessBranch string) string {
     }
   ],
 `
-	return strings.Replace(validGateJSON(), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
+	return strings.Replace(gateJSON("service-repo-check"), `  "decision": "允许进入 4.1 任务拆分。"`, repos+`  "decision": "允许进入 4.1 任务拆分。"`, 1)
 }
 
 func writeLifecycleTemplates(t *testing.T, root string) {

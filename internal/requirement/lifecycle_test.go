@@ -22,7 +22,7 @@ func TestCreateRequirementCopiesTemplates(t *testing.T) {
 	assertFileContains(t, root, "requirements/SPARK-3/tasks.json", `"requirement_id": "SPARK-3"`)
 }
 
-func TestInspectReportsMissingGateProblems(t *testing.T) {
+func TestInspectDoesNotBlockOnFutureGates(t *testing.T) {
 	root := t.TempDir()
 	writeHarnessTemplates(t, root)
 	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
@@ -37,11 +37,11 @@ func TestInspectReportsMissingGateProblems(t *testing.T) {
 	if status.CurrentStage != "1" {
 		t.Fatalf("expected current stage 1, got %q", status.CurrentStage)
 	}
-	if len(status.Problems) == 0 {
-		t.Fatal("expected missing gate problems")
+	if len(status.Problems) != 0 {
+		t.Fatalf("expected no problems for future gates, got %#v", status.Problems)
 	}
-	if !strings.Contains(status.NextAction, "gate-check") {
-		t.Fatalf("expected gate-check next action, got %q", status.NextAction)
+	if !strings.Contains(status.NextAction, "requirement next") {
+		t.Fatalf("expected next-stage action, got %q", status.NextAction)
 	}
 }
 
@@ -91,6 +91,30 @@ func TestInspectInfersStageWhenReadmeHasNoStage(t *testing.T) {
 	}
 	if status.CurrentStage != "4.1" {
 		t.Fatalf("expected inferred stage 4.1, got %q", status.CurrentStage)
+	}
+}
+
+func TestInspectReportsCurrentStageGateProblems(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCurrentStage(filepath.Join(root, "requirements", "SPARK-3", "README.md"), "2"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/gates/requirement-review.gate.json", strings.Replace(validGateJSON(), `"result": "PASS"`, `"result": "BLOCKED"`, 1))
+
+	status, err := Inspect(root, "SPARK-3", fixedTime())
+
+	if err != nil {
+		t.Fatalf("expected inspect to pass, got %v", err)
+	}
+	if !containsProblem(status.Problems, "invalid gate") {
+		t.Fatalf("expected current gate problem, got %#v", status.Problems)
+	}
+	if !strings.Contains(status.NextAction, "BLOCKED") {
+		t.Fatalf("expected blocked next action, got %q", status.NextAction)
 	}
 }
 
