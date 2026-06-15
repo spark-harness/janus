@@ -2,11 +2,33 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func guardEventJSON(t *testing.T, toolName string, toolInput map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"tool_name": toolName, "tool_input": toolInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func writeArtifact(t *testing.T, dir string, rel string, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
 
 func runGuardEdit(t *testing.T, eventJSON string) (int, string, string) {
 	t.Helper()
@@ -31,11 +53,96 @@ func TestGuardEditAllowsNonArtifact(t *testing.T) {
 	}
 }
 
-func TestGuardEditAllowsArtifactWithoutRules(t *testing.T) {
-	// B1 has no rules yet: even an approved requirement.md write is allowed.
+func TestGuardEditDeniesWriteApproved(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
-	event := `{"tool_name":"Write","tool_input":{"file_path":"` + target + `","content":"---\nstatus: \"approved\"\n---\n"}}`
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"approved\"\napproved_by: \"agent\"\n---\n# x\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+	if !strings.Contains(stderr, "approved") {
+		t.Fatalf("expected approval reason on stderr, got %q", stderr)
+	}
+}
+
+func TestGuardEditDeniesEditIntoApproved(t *testing.T) {
+	dir := t.TempDir()
+	target := writeArtifact(t, dir, "requirements/SPARK-3/requirement.md",
+		"---\nstatus: \"draft\"\n---\n# x\n")
+	event := guardEventJSON(t, "Edit", map[string]any{
+		"file_path":  target,
+		"old_string": `status: "draft"`,
+		"new_string": `status: "approved"`,
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditDeniesMultiEditAssemblingApproval(t *testing.T) {
+	dir := t.TempDir()
+	target := writeArtifact(t, dir, "requirements/SPARK-3/requirement.md",
+		"---\nstatus: \"draft\"\napproved_by: \"\"\n---\n# x\n")
+	event := guardEventJSON(t, "MultiEdit", map[string]any{
+		"file_path": target,
+		"edits": []map[string]any{
+			{"old_string": `approved_by: ""`, "new_string": `approved_by: "forest"`},
+			{"old_string": `status: "draft"`, "new_string": `status: "approved"`},
+		},
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditDeniesTasksApproved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "tasks.json")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "{\n  \"status\": \"approved\",\n  \"tasks\": []\n}\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditAllowsDraftWrite(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n# x\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
+	}
+}
+
+func TestGuardEditAllowsBodyEditOfApproved(t *testing.T) {
+	// Editing the body of an already-approved file keeps status approved; that
+	// is not a forged transition (drift is handled elsewhere), so allow.
+	dir := t.TempDir()
+	target := writeArtifact(t, dir, "requirements/SPARK-3/requirement.md",
+		"---\nstatus: \"approved\"\napproved_by: \"forest\"\n---\n# old body\n")
+	event := guardEventJSON(t, "Edit", map[string]any{
+		"file_path":  target,
+		"old_string": "# old body",
+		"new_string": "# new body",
+	})
 
 	code, _, stderr := runGuardEdit(t, event)
 	if code != ExitOK {
