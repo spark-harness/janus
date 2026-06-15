@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // artifactKind classifies a target file path against the lifecycle artifacts the
@@ -72,8 +74,70 @@ func GuardEdit(in GuardInput) GuardDecision {
 	if d := guardForgedApproval(in, kind); d.Deny {
 		return d
 	}
-	// R1 (worktree-before-requirement) and R2 (stage order) follow.
+	// R1: requirement artifacts must be written in an isolated worktree, never
+	// in the repo's main checkout.
+	if d := guardWorktreeIsolation(in); d.Deny {
+		return d
+	}
+	// R2 (stage order) follows.
 	return GuardDecision{}
+}
+
+// guardWorktreeIsolation denies writing a lifecycle artifact into a repo's main
+// checkout. A linked worktree has an absolute git-dir that differs from its
+// git-common-dir; a normal checkout has them equal. Unknown/non-git locations
+// fail open (the guard cannot assert it is a main checkout).
+func guardWorktreeIsolation(in GuardInput) GuardDecision {
+	dir := nearestExistingDir(filepath.Dir(in.TargetPath))
+	if dir == "" {
+		return GuardDecision{}
+	}
+	gitDir, ok := gitRevParse(dir, "--absolute-git-dir")
+	if !ok {
+		return GuardDecision{}
+	}
+	commonDir, ok := gitRevParse(dir, "--path-format=absolute", "--git-common-dir")
+	if !ok {
+		return GuardDecision{}
+	}
+	if filepath.Clean(gitDir) != filepath.Clean(commonDir) {
+		return GuardDecision{}
+	}
+	return GuardDecision{
+		Deny: true,
+		Reason: fmt.Sprintf(
+			"%s 位于仓库主 checkout，不是隔离 worktree。先运行 spark-worktree-isolation 在 .worktrees/ 下建立隔离 worktree，再写需求文件。",
+			artifactHint(in.TargetPath),
+		),
+	}
+}
+
+// nearestExistingDir walks up from dir until it finds an existing directory, so
+// the guard can query git even when the target's parent dirs do not exist yet.
+func nearestExistingDir(dir string) string {
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func gitRevParse(dir string, args ...string) (string, bool) {
+	full := append([]string{"-C", dir, "rev-parse"}, args...)
+	out, err := exec.Command("git", full...).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+func artifactHint(path string) string {
+	return filepath.ToSlash(filepath.Join(filepath.Base(filepath.Dir(path)), filepath.Base(path)))
 }
 
 // guardForgedApproval denies an edit that transitions the artifact's status

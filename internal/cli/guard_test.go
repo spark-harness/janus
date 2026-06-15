@@ -4,10 +4,34 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	full := append([]string{"-C", dir}, args...)
+	if out, err := exec.Command("git", full...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func gitInitWithCommit(t *testing.T, dir string) {
+	t.Helper()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "init")
+}
 
 func guardEventJSON(t *testing.T, toolName string, toolInput map[string]any) string {
 	t.Helper()
@@ -142,6 +166,44 @@ func TestGuardEditAllowsBodyEditOfApproved(t *testing.T) {
 		"file_path":  target,
 		"old_string": "# old body",
 		"new_string": "# new body",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
+	}
+}
+
+func TestGuardEditDeniesRequirementInMainCheckout(t *testing.T) {
+	requireGit(t)
+	repo := t.TempDir()
+	gitInitWithCommit(t, repo)
+	target := filepath.Join(repo, "requirements", "SPARK-3", "requirement.md")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n# x\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+	if !strings.Contains(stderr, "worktree") {
+		t.Fatalf("expected worktree reason, got %q", stderr)
+	}
+}
+
+func TestGuardEditAllowsRequirementInLinkedWorktree(t *testing.T) {
+	requireGit(t)
+	repo := t.TempDir()
+	gitInitWithCommit(t, repo)
+	wt := filepath.Join(t.TempDir(), "isolated")
+	runGit(t, repo, "worktree", "add", wt, "-b", "feature/spark-3")
+
+	target := filepath.Join(wt, "requirements", "SPARK-3", "requirement.md")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n# x\n",
 	})
 
 	code, _, stderr := runGuardEdit(t, event)
