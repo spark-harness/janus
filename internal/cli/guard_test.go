@@ -212,6 +212,92 @@ func TestGuardEditAllowsRequirementInLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestGuardEditDeniesDesignWithoutPrereqs(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "design.md")
+	// only requirement.md exists, impact-analysis.md missing
+	writeArtifact(t, dir, "requirements/SPARK-3/requirement.md", "---\nstatus: \"approved\"\n---\n")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n# Design\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+	if !strings.Contains(stderr, "impact-analysis.md") {
+		t.Fatalf("expected missing-prereq reason, got %q", stderr)
+	}
+}
+
+func TestGuardEditAllowsDesignWithPrereqs(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "design.md")
+	writeArtifact(t, dir, "requirements/SPARK-3/requirement.md", "---\nstatus: \"approved\"\n---\n")
+	writeArtifact(t, dir, "requirements/SPARK-3/impact-analysis.md", "---\nstatus: \"approved\"\n---\n")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n# Design\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
+	}
+}
+
+func TestGuardEditDeniesTasksWhenDesignUnapproved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "tasks.json")
+	writeArtifact(t, dir, "requirements/SPARK-3/design.md", "---\nstatus: \"draft\"\n---\n")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "{\n  \"status\": \"draft\",\n  \"tasks\": []\n}\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+	if !strings.Contains(stderr, "design-review") {
+		t.Fatalf("expected design-review reason, got %q", stderr)
+	}
+}
+
+func TestGuardEditAllowsTasksWhenDesignApproved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "tasks.json")
+	writeArtifact(t, dir, "requirements/SPARK-3/design.md", "---\nstatus: \"approved\"\n---\n")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "{\n  \"status\": \"draft\",\n  \"tasks\": []\n}\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
+	}
+}
+
+func TestGuardEditDeniesRequirementGateWithoutImpact(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "gates", "requirement-review.gate.json")
+	writeArtifact(t, dir, "requirements/SPARK-3/requirement.md", "---\nstatus: \"draft\"\n---\n")
+	event := guardEventJSON(t, "Write", map[string]any{
+		"file_path": target,
+		"content":   "{\n  \"gate_id\": \"requirement-review\"\n}\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+	if !strings.Contains(stderr, "impact-analysis.md") {
+		t.Fatalf("expected impact-analysis reason, got %q", stderr)
+	}
+}
+
 func TestGuardEditAllowsMalformedEvent(t *testing.T) {
 	code, _, _ := runGuardEdit(t, "not json")
 	if code != ExitOK {

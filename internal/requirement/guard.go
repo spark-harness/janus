@@ -19,13 +19,21 @@ const (
 	artifactImpact
 	artifactDesign
 	artifactTasks
+	artifactGateJSON
 )
 
 // classifyArtifact recognizes requirements/<id>/{requirement.md, impact-analysis.md,
-// design.md, tasks.json} by structure, independent of the absolute workspace path.
+// design.md, tasks.json} and requirements/<id>/gates/<gate>.gate.json by
+// structure, independent of the absolute workspace path.
 func classifyArtifact(path string) artifactKind {
 	base := filepath.Base(path)
 	idDir := filepath.Dir(path)
+	if filepath.Base(idDir) == "gates" && strings.HasSuffix(base, ".gate.json") {
+		if filepath.Base(filepath.Dir(filepath.Dir(idDir))) == "requirements" {
+			return artifactGateJSON
+		}
+		return artifactNone
+	}
 	if filepath.Base(filepath.Dir(idDir)) != "requirements" {
 		return artifactNone
 	}
@@ -79,8 +87,65 @@ func GuardEdit(in GuardInput) GuardDecision {
 	if d := guardWorktreeIsolation(in); d.Deny {
 		return d
 	}
-	// R2 (stage order) follows.
+	// R2: lifecycle stage order — an artifact may not be written before its
+	// prerequisite artifacts exist and (where required) are approved.
+	if d := guardStageOrder(in, kind); d.Deny {
+		return d
+	}
 	return GuardDecision{}
+}
+
+// guardStageOrder enforces the within-requirement prerequisite order. The
+// .proto stage rule from the design is intentionally not implemented here: a
+// .proto edit in idl-repo has no deterministic link back to a requirement, so
+// it is left to the merge-readiness gate / CI rather than guessed.
+func guardStageOrder(in GuardInput, kind artifactKind) GuardDecision {
+	reqDir := filepath.Dir(in.TargetPath)
+	if kind == artifactGateJSON {
+		reqDir = filepath.Dir(reqDir) // up from gates/ to requirements/<id>
+	}
+	switch kind {
+	case artifactDesign:
+		var missing []string
+		if !siblingExists(reqDir, "requirement.md") {
+			missing = append(missing, "requirement.md")
+		}
+		if !siblingExists(reqDir, "impact-analysis.md") {
+			missing = append(missing, "impact-analysis.md")
+		}
+		if len(missing) > 0 {
+			return denyDecision(fmt.Sprintf("design.md 的前置产物缺失：%s。先完成需求与影响分析再写设计。", strings.Join(missing, ", ")))
+		}
+	case artifactTasks:
+		if !siblingExists(reqDir, "design.md") {
+			return denyDecision("tasks.json 的前置产物 design.md 缺失。先完成设计再拆任务。")
+		}
+		if !siblingApproved(reqDir, "design.md", artifactDesign) {
+			return denyDecision("design-review 未批准（design.md status 非 approved）。先经 janus requirement approve 批准设计门禁，再拆任务。")
+		}
+	case artifactGateJSON:
+		if filepath.Base(in.TargetPath) == "requirement-review.gate.json" && !siblingExists(reqDir, "impact-analysis.md") {
+			return denyDecision("requirement-review 门禁需要 impact-analysis.md 与 requirement.md 同时存在。先补影响分析，两者齐备后再生成门禁。")
+		}
+	}
+	return GuardDecision{}
+}
+
+func siblingExists(reqDir string, name string) bool {
+	info, err := os.Stat(filepath.Join(reqDir, name))
+	return err == nil && !info.IsDir()
+}
+
+func siblingApproved(reqDir string, name string, kind artifactKind) bool {
+	content, err := os.ReadFile(filepath.Join(reqDir, name))
+	if err != nil {
+		return false
+	}
+	return statusApproved(string(content), kind)
+}
+
+func denyDecision(reason string) GuardDecision {
+	return GuardDecision{Deny: true, Reason: reason}
 }
 
 // guardWorktreeIsolation denies writing a lifecycle artifact into a repo's main
