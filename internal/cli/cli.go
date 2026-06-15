@@ -23,6 +23,11 @@ const (
 	ExitEvidenceFailure = 6
 	ExitBranchPolicy    = 7
 
+	// ExitHookDeny is returned by PreToolUse-style hooks to block a tool call.
+	// Claude Code, Codex, and Gemini all treat exit code 2 (with the reason on
+	// stderr) as a deny; it shares the value of ExitInvalid by protocol.
+	ExitHookDeny = 2
+
 	Version = "0.1.0"
 )
 
