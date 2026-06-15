@@ -22,6 +22,12 @@ const (
 	artifactGateJSON
 )
 
+// IsGuardedArtifact reports whether a path is a lifecycle artifact the guard
+// cares about. Adapters use it to pick the relevant file from a multi-file edit.
+func IsGuardedArtifact(path string) bool {
+	return classifyArtifact(path) != artifactNone
+}
+
 // classifyArtifact recognizes requirements/<id>/{requirement.md, impact-analysis.md,
 // design.md, tasks.json} and requirements/<id>/gates/<gate>.gate.json by
 // structure, independent of the absolute workspace path.
@@ -71,16 +77,20 @@ type GuardDecision struct {
 // content, or a target outside the lifecycle artifacts). Rules are layered in
 // by later commits.
 func GuardEdit(in GuardInput) GuardDecision {
-	if !in.HasCandidate {
+	if in.TargetPath == "" {
 		return GuardDecision{}
 	}
 	kind := classifyArtifact(in.TargetPath)
 	if kind == artifactNone {
 		return GuardDecision{}
 	}
-	// R3: an agent must not be the actor that flips status into "approved".
-	if d := guardForgedApproval(in, kind); d.Deny {
-		return d
+	// R3 needs the resulting content; location (R1) and stage (R2) rules only
+	// need the target path, so they still apply when an adapter knows the path
+	// but cannot reconstruct the candidate (e.g. an unparsable Codex hunk).
+	if in.HasCandidate {
+		if d := guardForgedApproval(in, kind); d.Deny {
+			return d
+		}
 	}
 	// R1: requirement artifacts must be written in an isolated worktree, never
 	// in the repo's main checkout.

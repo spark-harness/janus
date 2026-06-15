@@ -34,8 +34,12 @@ func gitInitWithCommit(t *testing.T, dir string) {
 }
 
 func guardEventJSON(t *testing.T, toolName string, toolInput map[string]any) string {
+	return guardEventJSONFull(t, toolName, "", toolInput)
+}
+
+func guardEventJSONFull(t *testing.T, toolName string, cwd string, toolInput map[string]any) string {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{"tool_name": toolName, "tool_input": toolInput})
+	b, err := json.Marshal(map[string]any{"tool_name": toolName, "cwd": cwd, "tool_input": toolInput})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +299,95 @@ func TestGuardEditDeniesRequirementGateWithoutImpact(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "impact-analysis.md") {
 		t.Fatalf("expected impact-analysis reason, got %q", stderr)
+	}
+}
+
+func TestGuardEditGeminiDeniesWriteApproved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
+	event := guardEventJSON(t, "write_file", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"approved\"\n---\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditGeminiDeniesReplaceIntoApproved(t *testing.T) {
+	dir := t.TempDir()
+	target := writeArtifact(t, dir, "requirements/SPARK-3/requirement.md",
+		"---\nstatus: \"draft\"\n---\n")
+	event := guardEventJSON(t, "replace", map[string]any{
+		"file_path":  target,
+		"old_string": `status: "draft"`,
+		"new_string": `status: "approved"`,
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditGeminiAllowsDraft(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
+	event := guardEventJSON(t, "write_file", map[string]any{
+		"file_path": target,
+		"content":   "---\nstatus: \"draft\"\n---\n",
+	})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
+	}
+}
+
+func TestGuardEditCodexAddFileApprovedDenied(t *testing.T) {
+	dir := t.TempDir()
+	patch := "*** Begin Patch\n" +
+		"*** Add File: requirements/SPARK-3/requirement.md\n" +
+		"+---\n+status: \"approved\"\n+---\n" +
+		"*** End Patch\n"
+	event := guardEventJSONFull(t, "apply_patch", dir, map[string]any{"command": patch})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditCodexUpdateIntoApprovedDenied(t *testing.T) {
+	dir := t.TempDir()
+	writeArtifact(t, dir, "requirements/SPARK-3/requirement.md", "---\nstatus: \"draft\"\n---\n# x\n")
+	patch := "*** Begin Patch\n" +
+		"*** Update File: requirements/SPARK-3/requirement.md\n" +
+		"@@\n" +
+		"-status: \"draft\"\n" +
+		"+status: \"approved\"\n" +
+		"*** End Patch\n"
+	event := guardEventJSONFull(t, "apply_patch", dir, map[string]any{"command": patch})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitHookDeny {
+		t.Fatalf("expected deny (exit %d), got %d with stderr %q", ExitHookDeny, code, stderr)
+	}
+}
+
+func TestGuardEditCodexAddFileDraftAllowed(t *testing.T) {
+	dir := t.TempDir()
+	patch := "*** Begin Patch\n" +
+		"*** Add File: requirements/SPARK-3/requirement.md\n" +
+		"+---\n+status: \"draft\"\n+---\n" +
+		"*** End Patch\n"
+	event := guardEventJSONFull(t, "apply_patch", dir, map[string]any{"command": patch})
+
+	code, _, stderr := runGuardEdit(t, event)
+	if code != ExitOK {
+		t.Fatalf("expected allow (exit %d), got %d with stderr %q", ExitOK, code, stderr)
 	}
 }
 

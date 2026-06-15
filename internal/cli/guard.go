@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"janus/internal/requirement"
@@ -61,9 +62,148 @@ func guardCandidate(event guardEvent) (string, string, bool) {
 	switch event.ToolName {
 	case "Write", "Edit", "MultiEdit":
 		return claudeCandidate(event.ToolName, event.ToolInput)
+	case "write_file", "replace":
+		return geminiCandidate(event.ToolName, event.ToolInput)
+	case "apply_patch":
+		return codexCandidate(event.CWD, event.ToolInput)
 	default:
 		return "", "", false
 	}
+}
+
+// geminiCandidate adapts Gemini CLI's write_file / replace tools. Gemini passes
+// absolute file paths.
+func geminiCandidate(toolName string, input json.RawMessage) (string, string, bool) {
+	switch toolName {
+	case "write_file":
+		var w struct {
+			FilePath string `json:"file_path"`
+			Content  string `json:"content"`
+		}
+		if json.Unmarshal(input, &w) != nil || w.FilePath == "" {
+			return "", "", false
+		}
+		return w.FilePath, w.Content, true
+	case "replace":
+		var e struct {
+			FilePath  string `json:"file_path"`
+			OldString string `json:"old_string"`
+			NewString string `json:"new_string"`
+		}
+		if json.Unmarshal(input, &e) != nil || e.FilePath == "" {
+			return "", "", false
+		}
+		current, err := os.ReadFile(e.FilePath)
+		if err != nil {
+			return e.FilePath, "", false
+		}
+		next, ok := applyEdit(string(current), e.OldString, e.NewString, false)
+		if !ok {
+			return e.FilePath, "", false
+		}
+		return e.FilePath, next, true
+	}
+	return "", "", false
+}
+
+// codexCandidate adapts Codex CLI's apply_patch tool. tool_input.command holds
+// the patch; paths are relative to the session cwd. It returns the first file
+// op that targets a guarded artifact, resolving the path to absolute. For an
+// Update whose hunk cannot be applied, the path is returned with ok=false so
+// location/stage rules still apply even though approval state is unknown.
+func codexCandidate(cwd string, input json.RawMessage) (string, string, bool) {
+	var p struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(input, &p) != nil || p.Command == "" {
+		return "", "", false
+	}
+	for _, op := range parseApplyPatch(p.Command) {
+		abs := op.path
+		if !filepath.IsAbs(abs) && cwd != "" {
+			abs = filepath.Join(cwd, op.path)
+		}
+		if !requirement.IsGuardedArtifact(abs) {
+			continue
+		}
+		if op.isAdd {
+			return abs, op.added, true
+		}
+		current, err := os.ReadFile(abs)
+		if err != nil {
+			return abs, "", false
+		}
+		if op.oldBlock == "" || !strings.Contains(string(current), op.oldBlock) {
+			return abs, "", false
+		}
+		return abs, strings.Replace(string(current), op.oldBlock, op.newBlock, 1), true
+	}
+	return "", "", false
+}
+
+type patchFileOp struct {
+	path     string
+	isAdd    bool
+	added    string // full new content (Add File)
+	oldBlock string // context+removed lines (Update File)
+	newBlock string // context+added lines (Update File)
+}
+
+// parseApplyPatch parses the apply_patch envelope into per-file operations. For
+// an Update, oldBlock/newBlock are reconstructed from context (' '), removed
+// ('-') and added ('+') lines so a single string replacement reproduces the
+// edit for the guard's purposes.
+func parseApplyPatch(patch string) []patchFileOp {
+	var ops []patchFileOp
+	lines := strings.Split(patch, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		var op patchFileOp
+		switch {
+		case strings.HasPrefix(line, "*** Add File: "):
+			op.isAdd = true
+			op.path = strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))
+		case strings.HasPrefix(line, "*** Update File: "):
+			op.path = strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))
+		default:
+			i++
+			continue
+		}
+		i++
+
+		var added, oldLines, newLines []string
+		for i < len(lines) && !strings.HasPrefix(lines[i], "*** ") {
+			hl := lines[i]
+			switch {
+			case strings.HasPrefix(hl, "@@"):
+				// hunk header; no content
+			case strings.HasPrefix(hl, "+"):
+				added = append(added, hl[1:])
+				newLines = append(newLines, hl[1:])
+			case strings.HasPrefix(hl, "-"):
+				oldLines = append(oldLines, hl[1:])
+			case strings.HasPrefix(hl, " "):
+				oldLines = append(oldLines, hl[1:])
+				newLines = append(newLines, hl[1:])
+			default:
+				oldLines = append(oldLines, hl)
+				newLines = append(newLines, hl)
+			}
+			i++
+		}
+		if op.isAdd {
+			op.added = strings.Join(added, "\n")
+			if len(added) > 0 {
+				op.added += "\n"
+			}
+		} else {
+			op.oldBlock = strings.Join(oldLines, "\n")
+			op.newBlock = strings.Join(newLines, "\n")
+		}
+		ops = append(ops, op)
+	}
+	return ops
 }
 
 func claudeCandidate(toolName string, input json.RawMessage) (string, string, bool) {
