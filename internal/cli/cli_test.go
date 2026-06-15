@@ -499,6 +499,86 @@ func TestHookGateDriftCheckPassesRenderedMarkdown(t *testing.T) {
 	}
 }
 
+func TestRequirementApproveWritesApprovalMD(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\nrequirement_id: \"SPARK-3\"\nstatus: \"draft\"\napproved_by: \"\"\napproved_at: \"\"\ndecision: \"\"\n---\n\n# Title\n"
+	if err := os.WriteFile(path, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "approve", "--requirement", "SPARK-3", "--gate", "requirement-review", "--approved-by", "forest", "--decision", "需求定义通过", "--approved-at", "2026-06-16T10:00:00+08:00", "--yes"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/requirement.md", `status: "approved"`)
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/requirement.md", `approved_by: "forest"`)
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/requirement.md", `approved_at: "2026-06-16T10:00:00+08:00"`)
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/requirement.md", `decision: "需求定义通过"`)
+}
+
+func TestRequirementApproveWritesApprovalTasks(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, "requirements", "SPARK-3", "tasks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draft := "{\n  \"requirement_id\": \"SPARK-3\",\n  \"status\": \"draft\",\n  \"approved_by\": \"\",\n  \"approved_at\": \"\",\n  \"decision\": \"\",\n  \"tasks\": [\n    { \"id\": \"T1\", \"state\": \"todo\" }\n  ]\n}\n"
+	if err := os.WriteFile(path, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"requirement", "approve", "--requirement", "SPARK-3", "--gate", "dev-entry", "--approved-by", "forest", "--decision", "dev-entry ok", "--yes"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/tasks.json", `"status": "approved"`)
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/tasks.json", `"approved_by": "forest"`)
+	// the task item's state must be untouched (only the top-level field changes)
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/tasks.json", `"state": "todo"`)
+}
+
+func TestRequirementApproveRefusesNonTTY(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, "requirements", "SPARK-3", "requirement.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\nstatus: \"draft\"\napproved_by: \"\"\napproved_at: \"\"\ndecision: \"\"\n---\n"
+	if err := os.WriteFile(path, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := stdinIsInteractive
+	stdinIsInteractive = func() bool { return false }
+	defer func() { stdinIsInteractive = previous }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	// No --yes and a non-interactive stdin, so this must refuse.
+	code := Run([]string{"requirement", "approve", "--requirement", "SPARK-3", "--gate", "requirement-review", "--approved-by", "forest", "--decision", "ok"}, &stdout, &stderr)
+
+	if code != ExitBlocked {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitBlocked, code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "non-interactively") {
+		t.Fatalf("expected refusal reason, got %q", stderr.String())
+	}
+	assertCLIFileContains(t, dir, "requirements/SPARK-3/requirement.md", `status: "draft"`)
+}
+
 func writeRequirementInput(t *testing.T, root string, content string) {
 	t.Helper()
 	path := filepath.Join(root, "requirements", "T12345", "requirement.md")
