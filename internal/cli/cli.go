@@ -23,6 +23,11 @@ const (
 	ExitEvidenceFailure = 6
 	ExitBranchPolicy    = 7
 
+	// ExitHookDeny is returned by PreToolUse-style hooks to block a tool call.
+	// Claude Code, Codex, and Gemini all treat exit code 2 (with the reason on
+	// stderr) as a deny; it shares the value of ExitInvalid by protocol.
+	ExitHookDeny = 2
+
 	Version = "0.1.0"
 )
 
@@ -190,6 +195,8 @@ func runRequirement(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runRequirementStatus(args[1:], stdout, stderr)
 	case "gate-check":
 		return runRequirementGateCheck(args[1:], stdout, stderr)
+	case "approve":
+		return runRequirementApprove(args[1:], stdout, stderr)
 	case "next":
 		return runRequirementNext(args[1:], stdout, stderr)
 	case "verify":
@@ -298,6 +305,72 @@ func runRequirementGateCheck(args []string, stdout io.Writer, stderr io.Writer) 
 	return ExitOK
 }
 
+func runRequirementApprove(args []string, stdout io.Writer, stderr io.Writer) int {
+	args = normalizeRequirementPositional(args, "requirement", "gate", "approved-by", "approved-at", "decision")
+	flags := flag.NewFlagSet("requirement approve", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requirementID := flags.String("requirement", "", "requirement id")
+	gateID := flags.String("gate", "", "gate id")
+	approvedBy := flags.String("approved-by", "", "human approver")
+	decision := flags.String("decision", "", "approval decision text")
+	approvedAt := flags.String("approved-at", "", "approval time (RFC3339); defaults to now")
+	yes := flags.Bool("yes", false, "confirm a non-interactive approval")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *requirementID == "" && flags.NArg() == 1 {
+		*requirementID = flags.Arg(0)
+	} else if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "requirement approve accepts at most one positional requirement id")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+	if *requirementID == "" || *gateID == "" {
+		fmt.Fprintln(stderr, "requirement approve requires --requirement and --gate")
+		printRequirementUsage(stderr)
+		return ExitInvalid
+	}
+
+	// Approval is a deliberate human act. Refuse non-interactive runs (an agent
+	// shelling out) unless a human explicitly passes --yes.
+	if !*yes && !stdinIsInteractive() {
+		fmt.Fprintln(stderr, "requirement approve refuses to run non-interactively without --yes")
+		fmt.Fprintln(stderr, "human approval only: re-run with --yes (e.g. ! janus requirement approve --requirement <id> --gate <gate> --approved-by <you> --decision <text> --yes)")
+		return ExitBlocked
+	}
+
+	at := strings.TrimSpace(*approvedAt)
+	if at == "" {
+		at = now().Format(time.RFC3339)
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cannot determine working directory: %v\n", err)
+		return ExitMissing
+	}
+	if err := requirement.Approve(root, *requirementID, requirement.ApproveOptions{
+		GateID:     *gateID,
+		ApprovedBy: *approvedBy,
+		ApprovedAt: at,
+		Decision:   *decision,
+	}); err != nil {
+		return printLifecycleError(stderr, err)
+	}
+	fmt.Fprintf(stdout, "approved %s for %s\n", *gateID, *requirementID)
+	return ExitOK
+}
+
+// stdinIsInteractive reports whether stdin is a terminal. It is a best-effort
+// guard against an agent shelling out to approve non-interactively; it is a
+// package var so tests can force the non-interactive branch deterministically.
+var stdinIsInteractive = func() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
 func runRequirementNext(args []string, stdout io.Writer, stderr io.Writer) int {
 	args = normalizeRequirementPositional(args, "requirement", "ticket-id")
 	flags := flag.NewFlagSet("requirement next", flag.ContinueOnError)
@@ -372,6 +445,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
 	fmt.Fprintln(w, "  janus requirement status <id>")
 	fmt.Fprintln(w, "  janus requirement gate-check --requirement <id> --gate <gate-id> [--owner <owner>]")
+	fmt.Fprintln(w, "  janus requirement approve --requirement <id> --gate <gate-id> --approved-by <name> --decision <text> [--approved-at <rfc3339>] [--yes]")
 	fmt.Fprintln(w, "  janus requirement next --requirement <id> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
@@ -390,6 +464,7 @@ func printRequirementUsage(w io.Writer) {
 	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
 	fmt.Fprintln(w, "  janus requirement status <id>")
 	fmt.Fprintln(w, "  janus requirement gate-check --requirement <id> --gate <gate-id> [--owner <owner>]")
+	fmt.Fprintln(w, "  janus requirement approve --requirement <id> --gate <gate-id> --approved-by <name> --decision <text> [--approved-at <rfc3339>] [--yes]")
 	fmt.Fprintln(w, "  janus requirement next --requirement <id> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 }

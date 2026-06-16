@@ -30,6 +30,8 @@ func runHook(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "gate-drift-check":
 		return runHookGateDriftCheck(args[1:], stdout, stderr)
+	case "guard-edit":
+		return runHookGuardEdit(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown hook subcommand %q\n", args[0])
 		printHookUsage(stderr)
@@ -155,4 +157,5 @@ func cleanRel(root string, path string) string {
 func printHookUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
+	fmt.Fprintln(w, "  janus hook guard-edit   (reads a PreToolUse event JSON on stdin)")
 }
