@@ -215,6 +215,44 @@ janus gate verify \
 - `WAIVED` 未过期。
 - 相关证据文件存在且 hash 匹配。
 
+### `janus delivery verify`
+
+验证多仓需求在当前 PR / push 上是否满足交付阶段规则。
+
+```sh
+janus delivery verify \
+  --requirement T12345 \
+  --repo business-repo \
+  --workspace /path/to/spark-workspace \
+  --base epic/foo \
+  --head feature/T12345
+```
+
+必须检查：
+
+- 读取 `harness-repo/requirements/<id>/requirement.md` front matter。
+- `target_branch == release_branch` 时判定为 release-bound，并使用
+  `release-readiness` / `formal-only`。
+- `target_branch != release_branch` 时判定为 integration-bound，并使用
+  `integration-readiness` / `rc-or-formal`。
+- 当前 PR base 与 `target_branch` 一致。
+- 当前 PR head 与 `related_branch` 一致。
+- integration-bound peer repo 满足当前阶段：同名 `related_branch` 存在、
+  `related_branch` 已合入 `target_branch`、或 `target_branch` 已合入
+  `release_branch`。
+- release-bound peer repo 满足当前阶段：`related_branch` 已合入
+  `release_branch`，或 `target_branch` 已合入 `release_branch`。
+- 当前仓是 `business-repo` 时，对当前 PR 变更到的 contract dependency 文件执行
+  `rc-or-formal` 或 `formal-only` 扫描。
+- release-bound 且变更文件消费 formal contract version 时，验证 IDL formal tag
+  存在、tag commit 可从 `release_branch` 追溯、Java Maven artifact 或 Go module
+  tag 存在，且 artifact version 与 dependency version 匹配。
+- `--output-gate` 存在时写入 gate JSON，失败时也写入 `BLOCKED` 报告。
+
+CLI 不自动执行 Formal 发布。Formal 发布由人完成后，delivery / release readiness
+验证 business dependency、tag、commit 和 artifact。未变更 contract dependency 文件
+时，不强扫历史依赖债务。
+
 ### `janus requirement verify`
 
 验证某个需求在指定目标下是否满足门禁要求。
@@ -249,6 +287,7 @@ CLI 必须返回稳定退出码。
 | 4 | 豁免不合法或已过期 |
 | 5 | 输入快照过期 |
 | 6 | 证据缺失或 hash 不匹配 |
+| 7 | 分支或 peer repo 状态不满足 delivery policy |
 
 CI 只根据退出码决定是否失败。
 

@@ -32,6 +32,52 @@ janus version
 
 所有 Harness 运行环境必须保证 `janus` 在 PATH 中，并能执行 `janus version`。
 
+### 验证多仓交付状态
+
+```sh
+janus delivery verify \
+  --requirement LEN-40 \
+  --repo business-repo \
+  --workspace /path/to/spark-workspace \
+  --base epic/foo \
+  --head feature/LEN-40-delivery-flow
+```
+
+`delivery verify` 读取 `harness-repo/requirements/<id>/requirement.md` front matter：
+
+- `related_branch`
+- `target_branch`
+- `release_branch`
+- `contract_gate_mode`
+- `affected_repositories`
+
+判断规则：
+
+```text
+target_branch == release_branch => release-bound => release-readiness => formal-only
+target_branch != release_branch => integration-bound => integration-readiness => rc-or-formal
+```
+
+integration-bound peer repo 合法状态：
+
+- 存在同名 `related_branch`。
+- `related_branch` 已合入 `target_branch`。
+- `related_branch` 或 `target_branch` 已合入 `release_branch`。
+
+release-bound peer repo 合法状态：
+
+- `related_branch` 已合入 `release_branch`。
+- `target_branch` 已合入 `release_branch`。
+
+当 `--repo business-repo` 时，Janus 还会对当前 PR 变更到的 `pom.xml`、
+`go.mod`、`go.sum` 调用 business-repo 的 contract dependency scan。
+在 release-bound 且变更文件实际消费 formal contract version 时，Janus 还会验证
+IDL formal tag、tag commit 的 release branch 可追溯性，以及 Java / Go artifact
+是否存在。未变更 contract dependency 文件时，不强扫历史依赖债务。
+
+可选 `--output-gate` 会写入 `integration-readiness.gate.json` 或
+`release-readiness.gate.json` 格式的 gate JSON。
+
 ### 校验门禁 JSON
 
 ```sh
@@ -189,6 +235,7 @@ janus hook gate-drift-check --root /path/to/harness-repo
 | 4 | 豁免不合法或已过期 |
 | 5 | 输入快照过期 |
 | 6 | 证据缺失或 hash 不匹配 |
+| 7 | 分支或 peer repo 状态不满足 delivery policy |
 
 ## 文档
 
