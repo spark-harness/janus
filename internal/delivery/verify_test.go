@@ -163,6 +163,7 @@ func TestVerifyReleaseBoundRejectsPeerWithOnlyRelatedBranch(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
 	business := initRepo(t, workspace, "business-repo")
+	disableGitHubPREvidence(t)
 
 	writeRequirement(t, harness, "LEN-40", `---
 related_branch: "feature/LEN-40-delivery-flow"
@@ -198,6 +199,46 @@ affected_repositories:
 	}
 	if len(result.Peers) != 1 || result.Peers[0].Status != "missing_required_state" {
 		t.Fatalf("expected missing release peer status, got %#v", result.Peers)
+	}
+}
+
+func TestVerifyReleaseBoundAcceptsPeerWithOpenReleasePR(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+
+	writeRequirement(t, harness, "LEN-40", `---
+related_branch: "feature/LEN-40-delivery-flow"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-40
+`)
+	git(t, business, "checkout", "-b", "feature/LEN-40-delivery-flow")
+	writeFile(t, business, "feature-only.txt", "not released")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "feat: unreleased change")
+	t.Setenv("JANUS_OPEN_RELEASE_PRS", "business-repo:feature/LEN-40-delivery-flow:master:17")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-40",
+		RepoName:      "harness-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-40-delivery-flow",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected open release PR evidence to pass, got %v", err)
+	}
+	if len(result.Peers) != 1 || result.Peers[0].Status != "release_pr_open" {
+		t.Fatalf("expected release_pr_open peer status, got %#v", result.Peers)
+	}
+	if result.Peers[0].Branch != "feature/LEN-40-delivery-flow -> master" {
+		t.Fatalf("expected PR branch evidence, got %#v", result.Peers[0])
 	}
 }
 
@@ -456,6 +497,7 @@ func TestVerifyFailsWhenPeerHasNoValidStageState(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
 	initRepo(t, workspace, "business-repo")
+	disableGitHubPREvidence(t)
 
 	writeRequirement(t, harness, "LEN-40", `---
 related_branch: "feature/LEN-40-delivery-flow"
@@ -488,6 +530,7 @@ func TestVerifyWritesGateReport(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
 	initRepo(t, workspace, "business-repo")
+	disableGitHubPREvidence(t)
 
 	writeRequirement(t, harness, "LEN-40", `---
 related_branch: "feature/LEN-40-delivery-flow"
@@ -543,6 +586,15 @@ func writeRequirement(t *testing.T, harness string, requirementID string, conten
 	t.Helper()
 	path := filepath.Join("requirements", requirementID, "requirement.md")
 	writeFile(t, harness, path, content)
+}
+
+func disableGitHubPREvidence(t *testing.T) {
+	t.Helper()
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("JANUS_REPO_TOKEN", "")
+	t.Setenv("BRANCH_COHERENCE_TOKEN", "")
+	t.Setenv("JANUS_OPEN_RELEASE_PRS", "")
 }
 
 func writeFile(t *testing.T, root string, relative string, content string) {

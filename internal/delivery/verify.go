@@ -379,6 +379,12 @@ func evaluatePeer(path string, name string, config requirementConfig, bound stri
 			status.Commit = gitOutput(path, "rev-parse", "--short", config.ReleaseBranch)
 			return status
 		}
+		if pr := openReleasePR(name, config.RelatedBranch, config.ReleaseBranch); pr != "" {
+			status.Status = "release_pr_open"
+			status.Branch = config.RelatedBranch + " -> " + config.ReleaseBranch
+			status.Commit = pr
+			return status
+		}
 		status.Status = "missing_required_state"
 		return status
 	}
@@ -428,7 +434,7 @@ func branchContains(path string, ancestor string, descendant string) bool {
 
 func isAcceptablePeerStatus(bound string, status string) bool {
 	if bound == BoundRelease {
-		return status == "related_merged_to_release" || status == "target_merged_to_release"
+		return status == "related_merged_to_release" || status == "target_merged_to_release" || status == "release_pr_open"
 	}
 	switch status {
 	case "related_branch_exists", "related_merged_to_target", "related_merged_to_release", "target_merged_to_release":
@@ -436,6 +442,84 @@ func isAcceptablePeerStatus(bound string, status string) bool {
 	default:
 		return false
 	}
+}
+
+func openReleasePR(repo string, headBranch string, baseBranch string) string {
+	repo = strings.TrimSpace(repo)
+	headBranch = strings.TrimSpace(headBranch)
+	baseBranch = strings.TrimSpace(baseBranch)
+	if repo == "" || headBranch == "" || baseBranch == "" {
+		return ""
+	}
+	if pr := openReleasePRFromEnv(repo, headBranch, baseBranch); pr != "" {
+		return pr
+	}
+	token := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"), os.Getenv("JANUS_REPO_TOKEN"), os.Getenv("BRANCH_COHERENCE_TOKEN"))
+	if token == "" {
+		return ""
+	}
+	if _, err := exec.LookPath("gh"); err != nil {
+		return ""
+	}
+	owner := firstNonEmpty(os.Getenv("JANUS_GITHUB_OWNER"), os.Getenv("GITHUB_REPOSITORY_OWNER"), "spark-harness")
+	apiPath := fmt.Sprintf(
+		"/repos/%s/%s/pulls?state=open&head=%s:%s&base=%s",
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.QueryEscape(owner),
+		url.QueryEscape(headBranch),
+		url.QueryEscape(baseBranch),
+	)
+	cmd := exec.Command("gh", "api", apiPath)
+	cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	var pulls []struct {
+		Number int    `json:"number"`
+		URL    string `json:"html_url"`
+		Head   struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(output, &pulls); err != nil || len(pulls) == 0 {
+		return ""
+	}
+	if pulls[0].URL != "" {
+		return pulls[0].URL
+	}
+	if pulls[0].Number > 0 {
+		return fmt.Sprintf("PR #%d", pulls[0].Number)
+	}
+	if pulls[0].Head.SHA != "" {
+		return shortSHA(pulls[0].Head.SHA)
+	}
+	return "open"
+}
+
+func openReleasePRFromEnv(repo string, headBranch string, baseBranch string) string {
+	for _, entry := range strings.Split(os.Getenv("JANUS_OPEN_RELEASE_PRS"), ",") {
+		parts := strings.Split(strings.TrimSpace(entry), ":")
+		if len(parts) < 3 {
+			continue
+		}
+		if parts[0] == repo && parts[1] == headBranch && parts[2] == baseBranch {
+			if len(parts) >= 4 && parts[3] != "" {
+				return "PR #" + parts[3]
+			}
+			return "open"
+		}
+	}
+	return ""
+}
+
+func shortSHA(sha string) string {
+	sha = strings.TrimSpace(sha)
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 func runBusinessContractScan(path string, mode string, baseBranch string, headBranch string) *ContractScanStatus {
