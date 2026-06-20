@@ -29,7 +29,7 @@ func runHook(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	switch args[0] {
 	case "gate-drift-check":
-		return runHookGateDriftCheck(args[1:], stdout, stderr)
+		return runHookGateJSONCheck(args[1:], stdout, stderr)
 	case "guard-edit":
 		return runHookGuardEdit(args[1:], stdout, stderr)
 	default:
@@ -39,7 +39,7 @@ func runHook(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
-func runHookGateDriftCheck(args []string, stdout io.Writer, stderr io.Writer) int {
+func runHookGateJSONCheck(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("hook gate-drift-check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", "", "repository root")
@@ -62,7 +62,7 @@ func runHookGateDriftCheck(args []string, stdout io.Writer, stderr io.Writer) in
 		repoRoot = wd
 	}
 
-	issues, err := checkGateRenderDrift(repoRoot)
+	issues, err := checkGateJSONReports(repoRoot)
 	if err != nil {
 		issues = append(issues, err.Error())
 	}
@@ -72,7 +72,7 @@ func runHookGateDriftCheck(args []string, stdout io.Writer, stderr io.Writer) in
 		response = hookResponse{
 			Continue:      false,
 			StopReason:    strings.Join(issues, "\n"),
-			SystemMessage: "Janus gate Markdown is out of date. Re-render gate reports before finishing.",
+			SystemMessage: "Janus gate JSON reports are invalid. Fix gate JSON before finishing.",
 		}
 	}
 
@@ -83,7 +83,7 @@ func runHookGateDriftCheck(args []string, stdout io.Writer, stderr io.Writer) in
 	return ExitOK
 }
 
-func checkGateRenderDrift(root string) ([]string, error) {
+func checkGateJSONReports(root string) ([]string, error) {
 	var issues []string
 	requirementsDir := filepath.Join(root, "requirements")
 	if _, err := os.Stat(requirementsDir); err != nil {
@@ -102,7 +102,7 @@ func checkGateRenderDrift(root string) ([]string, error) {
 			return nil
 		}
 
-		issues = append(issues, checkSingleGateRender(root, path)...)
+		issues = append(issues, checkSingleGateJSON(root, path)...)
 		return nil
 	})
 	if err != nil {
@@ -111,11 +111,8 @@ func checkGateRenderDrift(root string) ([]string, error) {
 	return issues, nil
 }
 
-func checkSingleGateRender(root string, gateJSONPath string) []string {
-	var issues []string
+func checkSingleGateJSON(root string, gateJSONPath string) []string {
 	relJSON := cleanRel(root, gateJSONPath)
-	mdPath := strings.TrimSuffix(gateJSONPath, ".gate.json") + ".md"
-	relMD := cleanRel(root, mdPath)
 
 	file, err := os.Open(gateJSONPath)
 	if err != nil {
@@ -130,20 +127,7 @@ func checkSingleGateRender(root string, gateJSONPath string) []string {
 	if err := gate.Validate(report); err != nil {
 		return []string{fmt.Sprintf("invalid gate JSON: %s: %v", relJSON, err)}
 	}
-
-	current, err := os.ReadFile(mdPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []string{"missing rendered gate Markdown: " + relMD}
-		}
-		return []string{fmt.Sprintf("cannot read gate Markdown: %s: %v", relMD, err)}
-	}
-
-	rendered := gate.Render(report, relJSON)
-	if string(current) != rendered {
-		issues = append(issues, "out-of-date gate Markdown: "+relMD)
-	}
-	return issues
+	return nil
 }
 
 func cleanRel(root string, path string) string {

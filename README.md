@@ -2,7 +2,7 @@
 
 `janus/` 用于整理 Harness Go CLI 的需求、设计和后续实现计划。
 
-Janus 是 Harness 门禁 CLI。它把 `*.gate.json` 作为门禁判定事实源，把 Markdown 作为审计视图，并通过稳定退出码让 CI 可以阻塞不合规的阶段推进。
+Janus 是 Harness 门禁 CLI。它把 `*.gate.json` 作为门禁判定事实源，并通过稳定退出码让 CI 可以阻塞不合规的阶段推进。
 
 ## 构建
 
@@ -48,22 +48,6 @@ janus gate validate requirements/T12345/gates/design-review.gate.json
 - `WARN` 必须有带后续动作的 `warnings`。
 - `WAIVED` 必须有完整豁免信息。
 
-### 渲染 Markdown
-
-```sh
-janus gate render \
-  --input requirements/T12345/gates/design-review.gate.json \
-  --output requirements/T12345/gates/design-review.md
-```
-
-检查 Markdown 是否漂移：
-
-```sh
-janus gate render --check \
-  --input requirements/T12345/gates/design-review.gate.json \
-  --output requirements/T12345/gates/design-review.md
-```
-
 ### 验证单个门禁
 
 ```sh
@@ -108,7 +92,7 @@ janus requirement new T12345 \
 janus requirement status T12345
 ```
 
-`status` 会检查生命周期产物、阶段门禁、合并就绪门禁、输入 hash、证据 hash 和 Markdown 渲染漂移，并给出下一步动作。
+`status` 会检查生命周期产物、阶段门禁、合并就绪门禁、输入 hash 和证据 hash，并给出下一步动作。
 
 生成指定门禁报告：
 
@@ -126,7 +110,9 @@ janus requirement gate-check \
 - `service-repo-check`
 - `merge-readiness`
 
-`gate-check` 会生成 `requirements/<id>/gates/<gate-id>.gate.json`，并同步渲染 Markdown 审计视图。当前实现只做确定性机器检查；即使机器检查通过，只要没有人工批准记录，顶层结果仍为 `BLOCKED`。
+`gate-check` 会生成 `requirements/<id>/gates/<gate-id>.gate.json`。当前实现只做确定性机器检查；即使机器检查通过，只要没有人工批准记录，顶层结果仍为 `BLOCKED`。
+
+历史 `requirements/*/gates/*.md` 只视为旧审计快照。Janus 不再生成、刷新或校验 gate Markdown，也不把 Markdown 作为阶段推进、CI 或合并判断依据。
 
 人工审批状态保留在对应原始产物中：
 

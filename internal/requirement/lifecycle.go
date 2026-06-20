@@ -68,13 +68,11 @@ type GateStatus struct {
 	GateID          string
 	Stage           string
 	Path            string
-	MarkdownPath    string
 	Exists          bool
 	Valid           bool
 	Result          string
 	BlocksNextStage bool
 	Stale           bool
-	MarkdownStale   bool
 	Problems        []string
 }
 
@@ -85,9 +83,8 @@ type GateCheckOptions struct {
 }
 
 type GateCheckResult struct {
-	JSONPath     string
-	MarkdownPath string
-	Report       *gate.Report
+	JSONPath string
+	Report   *gate.Report
 }
 
 type approval struct {
@@ -377,19 +374,13 @@ func RunGateCheck(root string, requirementID string, options GateCheckOptions) (
 	}
 
 	jsonPath := filepath.Join(gateDir, def.GateID+".gate.json")
-	mdPath := filepath.Join(gateDir, def.GateID+".md")
 	if err := writeGateJSON(jsonPath, report); err != nil {
 		return nil, err
 	}
-	rendered := gate.Render(report, filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", def.GateID+".gate.json")))
-	if err := os.WriteFile(mdPath, []byte(rendered), 0o644); err != nil {
-		return nil, &LifecycleError{Code: gate.VerifyMissing, Problems: []string{fmt.Sprintf("cannot write %s: %v", mdPath, err)}}
-	}
 
 	return &GateCheckResult{
-		JSONPath:     filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", def.GateID+".gate.json")),
-		MarkdownPath: filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", def.GateID+".md")),
-		Report:       report,
+		JSONPath: filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", def.GateID+".gate.json")),
+		Report:   report,
 	}, nil
 }
 
@@ -699,14 +690,11 @@ func writeCurrentStage(readmePath string, stage string) error {
 func inspectGate(root string, requirementID string, gateID string, now time.Time) GateStatus {
 	def, _ := gateDefinition(gateID)
 	jsonRelative := filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", gateID+".gate.json"))
-	mdRelative := filepath.ToSlash(filepath.Join("requirements", requirementID, "gates", gateID+".md"))
 	jsonPath := filepath.Join(root, filepath.FromSlash(jsonRelative))
-	mdPath := filepath.Join(root, filepath.FromSlash(mdRelative))
 	status := GateStatus{
-		GateID:       gateID,
-		Stage:        def.Stage,
-		Path:         jsonRelative,
-		MarkdownPath: mdRelative,
+		GateID: gateID,
+		Stage:  def.Stage,
+		Path:   jsonRelative,
 	}
 	report, err := readGate(jsonPath)
 	if err != nil {
@@ -730,12 +718,6 @@ func inspectGate(root string, requirementID string, gateID string, now time.Time
 	if problems := staleProblems(root, report.Evidence); len(problems) > 0 {
 		status.Stale = true
 		status.Problems = append(status.Problems, prefixProblems(jsonRelative, problems)...)
-	}
-	rendered := gate.Render(report, jsonRelative)
-	current, err := os.ReadFile(mdPath)
-	if err != nil || string(current) != rendered {
-		status.MarkdownStale = true
-		status.Problems = append(status.Problems, fmt.Sprintf("rendered Markdown is missing or stale: %s", mdRelative))
 	}
 	if report.Result == gate.ResultWaived {
 		if err := gate.Verify(report, root, now, gate.VerifyOptions{TicketID: requirementID}); err != nil {
@@ -789,8 +771,8 @@ func nextAction(status *Status) string {
 		if !gateStatus.Exists {
 			return "当前阶段完成并批准后，运行 gate-check 生成对应门禁。"
 		}
-		if gateStatus.Stale || gateStatus.MarkdownStale {
-			return "重新运行 gate-check 或 gate render 刷新过期门禁。"
+		if gateStatus.Stale {
+			return "重新运行 gate-check 刷新过期门禁 JSON。"
 		}
 		if gateStatus.Result == gate.ResultBlocked {
 			return "处理 BLOCKED 门禁或补充人工批准。"
@@ -1007,7 +989,11 @@ func checkServiceRepo(root string, requirementID string, problems *[]string) []g
 		*problems = append(*problems, serviceProblems...)
 		checklist = append(checklist, gate.ChecklistItem{Item: "涉及服务存在且路径可解析", Result: gate.ResultBlocked, Evidence: strings.Join(serviceProblems, "; ")})
 	} else {
-		checklist = append(checklist, gate.ChecklistItem{Item: "涉及服务存在且路径可解析", Result: gate.ResultPass, Evidence: strings.Join(affected, ", ")})
+		evidence := strings.Join(affected, ", ")
+		if evidence == "" {
+			evidence = "tasks.json 未声明业务服务；跳过服务矩阵路径校验。"
+		}
+		checklist = append(checklist, gate.ChecklistItem{Item: "涉及服务存在且路径可解析", Result: gate.ResultPass, Evidence: evidence})
 	}
 	return checklist
 }
@@ -1186,6 +1172,7 @@ func affectedServices(root string, requirementID string) []string {
 	if err == nil {
 		var tasks tasksFile
 		if json.Unmarshal(data, &tasks) == nil {
+			hasTasks := len(tasks.Tasks) > 0
 			for _, task := range tasks.Tasks {
 				for _, service := range task.AffectedServices {
 					service = strings.TrimSpace(service)
@@ -1193,6 +1180,9 @@ func affectedServices(root string, requirementID string) []string {
 						seen[service] = true
 					}
 				}
+			}
+			if hasTasks {
+				return sortedKeys(seen)
 			}
 		}
 	}
@@ -1213,6 +1203,15 @@ func affectedServices(root string, requirementID string) []string {
 	}
 	sort.Strings(services)
 	return services
+}
+
+func sortedKeys(values map[string]bool) []string {
+	var keys []string
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func extractBacktickedWords(text string) []string {
