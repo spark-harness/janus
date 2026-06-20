@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -250,6 +251,71 @@ func TestRequirementVerifyPasses(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "verified" {
 		t.Fatalf("expected verified output, got %q", stdout.String())
+	}
+}
+
+func TestDeliveryVerifyPasses(t *testing.T) {
+	dir := t.TempDir()
+	workspace := filepath.Join(dir, "workspace")
+	harness := initCLIGitRepo(t, workspace, "harness-repo")
+	business := initCLIGitRepo(t, workspace, "business-repo")
+	writeCLIFile(t, harness, "requirements/T12345/requirement.md", `---
+requirement_id: "T12345"
+related_branch: "feature/T12345"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# T12345
+`)
+	runCLIGit(t, business, "checkout", "-b", "feature/T12345")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"delivery", "verify", "--requirement", "T12345", "--repo", "harness-repo", "--workspace", workspace, "--base", "master", "--head", "feature/T12345"}, &stdout, &stderr)
+
+	if code != ExitOK {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitOK, code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Gate: release-readiness") {
+		t.Fatalf("expected delivery output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Contract Mode: formal-only") {
+		t.Fatalf("expected formal-only output, got %q", stdout.String())
+	}
+}
+
+func TestDeliveryVerifyReturnsBranchPolicyFailure(t *testing.T) {
+	dir := t.TempDir()
+	workspace := filepath.Join(dir, "workspace")
+	harness := initCLIGitRepo(t, workspace, "harness-repo")
+	initCLIGitRepo(t, workspace, "business-repo")
+	writeCLIFile(t, harness, "requirements/T12345/requirement.md", `---
+requirement_id: "T12345"
+related_branch: "feature/T12345"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# T12345
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"delivery", "verify", "--requirement", "T12345", "--repo", "harness-repo", "--workspace", workspace, "--base", "master", "--head", "feature/T12345"}, &stdout, &stderr)
+
+	if code != ExitBranchPolicy {
+		t.Fatalf("expected exit code %d, got %d with stderr %q", ExitBranchPolicy, code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "business-repo has no acceptable peer state") {
+		t.Fatalf("expected peer failure output, got %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Gate: release-readiness") {
+		t.Fatalf("expected blocked delivery summary, got %q", stdout.String())
 	}
 }
 
@@ -682,5 +748,41 @@ func assertCLIFileContains(t *testing.T, root string, relativePath string, want 
 	}
 	if !strings.Contains(string(content), want) {
 		t.Fatalf("expected %s to contain %q, got %q", relativePath, want, string(content))
+	}
+}
+
+func initCLIGitRepo(t *testing.T, workspace string, name string) string {
+	t.Helper()
+	repo := filepath.Join(workspace, name)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCLIGit(t, repo, "init", "-b", "master")
+	runCLIGit(t, repo, "config", "user.email", "test@example.com")
+	runCLIGit(t, repo, "config", "user.name", "Test")
+	writeCLIFile(t, repo, ".gitkeep", name)
+	runCLIGit(t, repo, "add", ".")
+	runCLIGit(t, repo, "commit", "-m", "chore: init")
+	return repo
+}
+
+func writeCLIFile(t *testing.T, root string, relativePath string, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runCLIGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
 	}
 }

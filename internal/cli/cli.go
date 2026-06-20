@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"janus/internal/delivery"
 	"janus/internal/gate"
 	"janus/internal/requirement"
 )
@@ -40,6 +41,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "gate":
 		return runGate(args[1:], stdout, stderr)
+	case "delivery":
+		return runDelivery(args[1:], stdout, stderr)
 	case "requirement":
 		return runRequirement(args[1:], stdout, stderr)
 	case "hook":
@@ -55,6 +58,66 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return ExitInvalid
 	}
+}
+
+func runDelivery(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing delivery subcommand")
+		printDeliveryUsage(stderr)
+		return ExitInvalid
+	}
+
+	switch args[0] {
+	case "verify":
+		return runDeliveryVerify(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown delivery subcommand %q\n", args[0])
+		printDeliveryUsage(stderr)
+		return ExitInvalid
+	}
+}
+
+func runDeliveryVerify(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("delivery verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requirementID := flags.String("requirement", "", "requirement id")
+	repoName := flags.String("repo", "", "current repository name")
+	workspace := flags.String("workspace", "..", "multi-repo workspace root")
+	baseBranch := flags.String("base", "", "current PR base branch")
+	headBranch := flags.String("head", "", "current PR head branch")
+	outputGate := flags.String("output-gate", "", "optional readiness gate JSON path")
+	if err := flags.Parse(args); err != nil {
+		return ExitInvalid
+	}
+	if *requirementID == "" || *repoName == "" || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "delivery verify requires --requirement and --repo")
+		printDeliveryUsage(stderr)
+		return ExitInvalid
+	}
+	result, err := delivery.Verify(*workspace, delivery.Options{
+		RequirementID: *requirementID,
+		RepoName:      *repoName,
+		BaseBranch:    *baseBranch,
+		HeadBranch:    *headBranch,
+		OutputGate:    *outputGate,
+		Now:           now(),
+	})
+	if err != nil {
+		var verifyErr *delivery.VerifyError
+		if errors.As(err, &verifyErr) {
+			for _, problem := range verifyErr.Problems {
+				fmt.Fprintf(stderr, "- %s\n", problem)
+			}
+			if result != nil {
+				printDeliveryResult(stdout, result)
+			}
+			return verifyErr.Code
+		}
+		fmt.Fprintln(stderr, err)
+		return ExitInvalid
+	}
+	printDeliveryResult(stdout, result)
+	return ExitOK
 }
 
 func runGate(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -389,6 +452,7 @@ func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  janus delivery verify --requirement <id> --repo <repo-name> [--workspace <path>] [--base <branch>] [--head <branch>] [--output-gate <path>]")
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
 	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
@@ -399,6 +463,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  janus requirement verify --requirement <id> --target merge [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus hook gate-drift-check [--root <repo-root>]")
 	fmt.Fprintln(w, "  janus version")
+}
+
+func printDeliveryUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  janus delivery verify --requirement <id> --repo <repo-name> [--workspace <path>] [--base <branch>] [--head <branch>] [--output-gate <path>]")
 }
 
 func printGateUsage(w io.Writer) {
@@ -526,6 +595,22 @@ func printRequirementStatus(stdout io.Writer, status *requirement.Status) {
 		}
 	}
 	fmt.Fprintf(stdout, "Next Action: %s\n", status.NextAction)
+}
+
+func printDeliveryResult(stdout io.Writer, result *delivery.Result) {
+	fmt.Fprintf(stdout, "Gate: %s\n", result.GateID)
+	fmt.Fprintf(stdout, "Requirement: %s\n", result.RequirementID)
+	fmt.Fprintf(stdout, "Bound: %s\n", result.Bound)
+	fmt.Fprintf(stdout, "Contract Mode: %s\n", result.ContractMode)
+	if result.ContractScan != nil {
+		fmt.Fprintf(stdout, "Contract Scan: %s %s %s\n", result.ContractScan.Repo, result.ContractScan.Status, result.ContractScan.Mode)
+		for _, evidence := range result.ContractScan.FormalEvidence {
+			fmt.Fprintf(stdout, "Formal Evidence: %s %s %s\n", evidence.Dependency, evidence.Status, evidence.Detail)
+		}
+	}
+	for _, peer := range result.Peers {
+		fmt.Fprintf(stdout, "Peer: %s %s %s\n", peer.Repo, peer.Status, peer.Branch)
+	}
 }
 
 func normalizeRequirementPositional(args []string, flagNames ...string) []string {
