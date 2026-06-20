@@ -46,6 +46,15 @@ func guardEventJSONFull(t *testing.T, toolName string, cwd string, toolInput map
 	return string(b)
 }
 
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func writeArtifact(t *testing.T, dir string, rel string, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(rel))
@@ -411,7 +420,7 @@ func TestClaudeCandidateEdit(t *testing.T) {
 	if err := os.WriteFile(target, []byte("alpha beta gamma"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"file_path":"` + target + `","old_string":"beta","new_string":"BETA"}`
+	input := mustJSON(t, map[string]string{"file_path": target, "old_string": "beta", "new_string": "BETA"})
 	path, content, ok := claudeCandidate("Edit", []byte(input))
 	if !ok || path != target || content != "alpha BETA gamma" {
 		t.Fatalf("unexpected (%q, %q, %v)", path, content, ok)
@@ -424,7 +433,7 @@ func TestClaudeCandidateEditMissingOldStringNotApplicable(t *testing.T) {
 	if err := os.WriteFile(target, []byte("alpha"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"file_path":"` + target + `","old_string":"zzz","new_string":"y"}`
+	input := mustJSON(t, map[string]string{"file_path": target, "old_string": "zzz", "new_string": "y"})
 	_, _, ok := claudeCandidate("Edit", []byte(input))
 	if ok {
 		t.Fatalf("expected ok=false when old_string is absent")
@@ -437,7 +446,13 @@ func TestClaudeCandidateMultiEdit(t *testing.T) {
 	if err := os.WriteFile(target, []byte("one two three"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"file_path":"` + target + `","edits":[{"old_string":"one","new_string":"1"},{"old_string":"three","new_string":"3"}]}`
+	input := mustJSON(t, map[string]any{
+		"file_path": target,
+		"edits": []map[string]string{
+			{"old_string": "one", "new_string": "1"},
+			{"old_string": "three", "new_string": "3"},
+		},
+	})
 	path, content, ok := claudeCandidate("MultiEdit", []byte(input))
 	if !ok || path != target || content != "1 two 3" {
 		t.Fatalf("unexpected (%q, %q, %v)", path, content, ok)
