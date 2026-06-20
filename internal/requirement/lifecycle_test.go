@@ -134,7 +134,9 @@ func TestRunGateCheckWritesBlockedMachineReport(t *testing.T) {
 		t.Fatalf("expected BLOCKED pending human approval, got %s", result.Report.Result)
 	}
 	assertFileContains(t, root, "requirements/SPARK-3/gates/requirement-review.gate.json", `"gate_id": "requirement-review"`)
-	assertFileContains(t, root, "requirements/SPARK-3/gates/requirement-review.md", "Generated from requirement-review.gate.json")
+	if _, err := os.Stat(filepath.Join(root, "requirements", "SPARK-3", "gates", "requirement-review.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected no rendered Markdown, stat err %v", err)
+	}
 }
 
 func TestRunGateCheckPassesWithMarkdownApproval(t *testing.T) {
@@ -331,6 +333,67 @@ decision: "服务仓库检查通过。"
 		if repo.Name == "idl-repo" {
 			t.Fatalf("did not expect idl-repo in repos: %#v", result.Report.Repos)
 		}
+	}
+}
+
+func TestRunServiceRepoCheckAllowsGovernanceTaskWithoutAffectedServices(t *testing.T) {
+	root := t.TempDir()
+	writeHarnessTemplates(t, root)
+	writeServiceMatrixWithBusinessRepo(t, root)
+	if err := Create(root, "SPARK-3", NewOptions{}, fixedTime()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "requirements/SPARK-3/impact-analysis.md", `---
+requirement_id: "SPARK-3"
+status: "approved"
+approved_by: "forest"
+approved_at: "2026-06-07T20:30:00+08:00"
+decision: "服务仓库检查通过。"
+idl_impact: "no"
+idl_impact_reason: "治理流程变更，不涉及 protobuf IDL。"
+---
+
+# Impact Analysis
+
+## Affected Services
+
+本需求只影响 `+"`harness-repo`"+` 和 `+"`janus`"+`，不涉及业务服务。
+
+## API / Contract Impact
+
+- Does this change involve protobuf IDL or external contracts: no
+
+## Rollout And Rollback
+`)
+	writeFile(t, root, "requirements/SPARK-3/tasks.json", `{
+  "requirement_id": "SPARK-3",
+  "status": "approved",
+  "approved_by": "forest",
+  "approved_at": "2026-06-07T20:30:00+08:00",
+  "decision": "任务拆分通过。",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Governance",
+      "scope": "Update harness governance and Janus CLI.",
+      "trace": {
+        "requirement_items": ["R1"],
+        "design_decisions": ["D1"]
+      },
+      "affected_services": [],
+      "acceptance": ["AC1"],
+      "state": "todo"
+    }
+  ]
+}`)
+
+	result, err := RunGateCheck(root, "SPARK-3", GateCheckOptions{GateID: GateServiceRepoCheck, Now: fixedTime()})
+
+	if err != nil {
+		t.Fatalf("expected gate check to pass, got %v", err)
+	}
+	if result.Report.Result != "PASS" {
+		t.Fatalf("expected PASS without affected services, got %s: %#v", result.Report.Result, result.Report.BlockingIssues)
 	}
 }
 

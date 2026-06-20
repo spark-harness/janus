@@ -67,8 +67,6 @@ func runGate(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "validate":
 		return runGateValidate(args[1:], stdout, stderr)
-	case "render":
-		return runGateRender(args[1:], stdout, stderr)
 	case "verify":
 		return runGateVerify(args[1:], stdout, stderr)
 	default:
@@ -106,53 +104,6 @@ func runGateVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	fmt.Fprintln(stdout, "verified")
-	return ExitOK
-}
-
-func runGateRender(args []string, stdout io.Writer, stderr io.Writer) int {
-	flags := flag.NewFlagSet("gate render", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	input := flags.String("input", "", "gate JSON path")
-	output := flags.String("output", "", "gate Markdown path")
-	check := flags.Bool("check", false, "check whether output is up to date")
-	if err := flags.Parse(args); err != nil {
-		return ExitInvalid
-	}
-	if *input == "" || *output == "" || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "gate render requires --input and --output")
-		printGateUsage(stderr)
-		return ExitInvalid
-	}
-
-	report, code := readValidGateFile(*input, stderr)
-	if code != ExitOK {
-		return code
-	}
-	rendered := []byte(gate.Render(report, *input))
-
-	if *check {
-		current, err := os.ReadFile(*output)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				fmt.Fprintf(stderr, "missing file: %s\n", *output)
-				return ExitMissing
-			}
-			fmt.Fprintf(stderr, "cannot read %s: %v\n", *output, err)
-			return ExitMissing
-		}
-		if string(current) != string(rendered) {
-			fmt.Fprintf(stderr, "rendered Markdown is out of date: %s\n", *output)
-			return ExitInvalid
-		}
-		fmt.Fprintln(stdout, "up to date")
-		return ExitOK
-	}
-
-	if err := os.WriteFile(*output, rendered, 0o644); err != nil {
-		fmt.Fprintf(stderr, "cannot write %s: %v\n", *output, err)
-		return ExitMissing
-	}
-	fmt.Fprintf(stdout, "rendered %s\n", *output)
 	return ExitOK
 }
 
@@ -297,7 +248,6 @@ func runRequirementGateCheck(args []string, stdout io.Writer, stderr io.Writer) 
 	fmt.Fprintf(stdout, "Gate: %s\n", result.Report.GateID)
 	fmt.Fprintf(stdout, "Result: %s\n", result.Report.Result)
 	fmt.Fprintf(stdout, "Source: %s\n", result.JSONPath)
-	fmt.Fprintf(stdout, "Report: %s\n", result.MarkdownPath)
 	fmt.Fprintf(stdout, "Reason: %s\n", result.Report.Decision)
 	if result.Report.Result == gate.ResultBlocked {
 		return ExitBlocked
@@ -440,7 +390,6 @@ func runRequirementVerify(args []string, stdout io.Writer, stderr io.Writer) int
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
-	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
 	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
 	fmt.Fprintln(w, "  janus requirement new <id> [--title <title>] [--owner <owner>] [--force]")
 	fmt.Fprintln(w, "  janus requirement status <id>")
@@ -455,7 +404,6 @@ func printUsage(w io.Writer) {
 func printGateUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  janus gate validate <gate.json>")
-	fmt.Fprintln(w, "  janus gate render --input <gate.json> --output <gate.md> [--check]")
 	fmt.Fprintln(w, "  janus gate verify --input <gate.json> [--ticket-id <id>]")
 }
 
@@ -565,7 +513,7 @@ func printRequirementStatus(stdout io.Writer, status *requirement.Status) {
 			state = gateStatus.Result
 			if !gateStatus.Valid {
 				state = "INVALID"
-			} else if gateStatus.Stale || gateStatus.MarkdownStale {
+			} else if gateStatus.Stale {
 				state += " (STALE)"
 			}
 		}

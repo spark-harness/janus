@@ -9,7 +9,7 @@
 - Agent 不直接决定是否通过。
 - CLI 负责执行或验证门禁。
 - CI 通过调用 CLI 获得确定的退出码。
-- Markdown 作为审计视图，不作为机器判定事实源。
+- 历史 Markdown 只作为旧审计快照，不作为机器判定事实源。
 
 ## 核心目标
 
@@ -18,8 +18,6 @@
 CLI 必须支持：
 
 - 校验门禁 JSON。
-- 从门禁 JSON 渲染 Markdown 报告。
-- 校验 Markdown 是否由 JSON 生成且未漂移。
 - 验证门禁是否允许阶段推进。
 - 在 CI / MR 中返回稳定退出码。
 
@@ -36,7 +34,7 @@ CLI 必须支持：
 | 服务矩阵 | `.service-matrix/dependencies.yaml` | 服务和仓库拓扑 |
 | IDL 契约 | `.proto` 或其他 IDL 文件 | 契约自身真相源 |
 | 门禁判定 | `*.gate.json` | 某次门禁对某组输入快照的判定结果 |
-| 门禁审计视图 | `*.md` | 从 `*.gate.json` 渲染，不参与机器判定 |
+| 历史门禁快照 | `*.md` | 旧流程留下的审计快照，不再生成、刷新或校验 |
 
 门禁 JSON 只表示：
 
@@ -58,14 +56,12 @@ CLI 必须支持：
 
 ```text
 requirements/{requirement-id}/gates/{gate-id}.gate.json
-requirements/{requirement-id}/gates/{gate-id}.md
 ```
 
 示例：
 
 ```text
 requirements/T12345/gates/design-review.gate.json
-requirements/T12345/gates/design-review.md
 ```
 
 ## JSON 数据结构
@@ -199,28 +195,6 @@ janus gate validate requirements/T12345/gates/design-review.gate.json
 - `BLOCKED` 必须包含 `blocking_issues`。
 - `WAIVED` 必须包含完整豁免信息。
 
-### `janus gate render`
-
-从门禁 JSON 渲染 Markdown。
-
-```sh
-janus gate render \
-  --input requirements/T12345/gates/design-review.gate.json \
-  --output requirements/T12345/gates/design-review.md
-```
-
-### `janus gate render --check`
-
-检查 Markdown 是否由当前 JSON 渲染且未漂移。
-
-```sh
-janus gate render --check \
-  --input requirements/T12345/gates/design-review.gate.json \
-  --output requirements/T12345/gates/design-review.md
-```
-
-如果重新渲染结果和现有 Markdown 不一致，命令失败。
-
 ### `janus gate verify`
 
 验证某个门禁是否可用于阶段推进或 CI 放行。
@@ -332,7 +306,8 @@ jobs:
 ### 通用规则
 
 - The CLI shall treat `*.gate.json` as the canonical source for gate decisions.
-- The CLI shall treat Markdown reports as rendered audit views, not decision sources.
+- The CLI shall not generate, refresh, or validate gate Markdown.
+- The CLI shall ignore historical gate Markdown for CI, stage progression, and merge verification.
 - The CLI shall fail verification when a gate JSON input hash does not match the current file content.
 - The CLI shall return stable non-zero exit codes for blocked, invalid, missing, stale, waived, and evidence-failed states.
 - The Agent shall invoke the CLI for final gate status instead of declaring PASS or BLOCKED directly.
@@ -341,9 +316,9 @@ jobs:
 ### 触发行为
 
 - When `janus gate validate` receives invalid JSON, the CLI shall exit with code `2`.
+- When `janus gate render` is requested, the CLI shall reject it as an unknown gate subcommand.
 - When `janus gate verify` finds `result = BLOCKED`, the CLI shall exit with code `1`.
 - When `janus gate verify` finds stale input hashes, the CLI shall exit with code `5`.
-- When `janus gate render --check` detects Markdown drift, the CLI shall fail.
 - When `janus requirement verify --target merge` cannot find the required gate report, the CLI shall exit with code `3`.
 
 ### 条件行为
