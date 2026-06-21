@@ -718,6 +718,12 @@ func collectFormalDependencies(businessPath string, changedPaths []string) ([]Fo
 	var dependencies []FormalDependency
 	for _, changedPath := range changedPaths {
 		fullPath := filepath.Join(businessPath, filepath.FromSlash(changedPath))
+		if _, err := os.Stat(fullPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("cannot stat %s: %v", changedPath, err)
+		}
 		switch filepath.Base(changedPath) {
 		case "pom.xml":
 			found, err := collectMavenFormalDependencies(fullPath, changedPath, config)

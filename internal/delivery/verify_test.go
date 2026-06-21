@@ -335,6 +335,52 @@ affected_repositories:
 	}
 }
 
+func TestVerifyReleaseBoundSkipsDeletedContractDependencyFiles(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+
+	writeRequirement(t, harness, "LEN-45", `---
+related_branch: "feature/LEN-45-cleanup-old-spark-assets"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-45
+	`)
+	writeBusinessContractScanner(t, business)
+	writeContractConfig(t, business)
+	writePom(t, business, "1.0.0")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: add retired contract consumer")
+	git(t, business, "checkout", "-b", "feature/LEN-45-cleanup-old-spark-assets")
+	if err := os.Remove(filepath.Join(business, "pom.xml")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: remove retired contract consumer")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-45",
+		RepoName:      "business-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-45-cleanup-old-spark-assets",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected deleted contract dependency files to pass, got %v", err)
+	}
+	if result.ContractScan == nil || result.ContractScan.Status != "passed" {
+		t.Fatalf("expected passing contract scan, got %#v", result.ContractScan)
+	}
+	if len(result.ContractScan.FormalDependencies) != 0 {
+		t.Fatalf("expected no formal dependencies from deleted files, got %#v", result.ContractScan.FormalDependencies)
+	}
+}
+
 func TestVerifyIntegrationBoundAllowsBusinessContractRC(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
@@ -719,6 +765,9 @@ parser.add_argument("--path", action="append", default=[])
 args = parser.parse_args()
 paths = [pathlib.Path(args.root, path) for path in args.path] if args.path else [pathlib.Path(args.root, "pom.xml")]
 text = "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
+if args.path and not text:
+    print(f"allowed no existing contract dependency files for {args.mode}")
+    sys.exit(0)
 if "1.2.3-rc." in text:
     version = "rc"
 elif "1.2.3" in text or "formal" in text:
