@@ -385,6 +385,12 @@ func evaluatePeer(path string, name string, config requirementConfig, bound stri
 			status.Commit = pr
 			return status
 		}
+		if pr := mergedReleasePR(path, name, config.RelatedBranch, config.ReleaseBranch); pr != "" {
+			status.Status = "release_pr_merged"
+			status.Branch = config.RelatedBranch + " -> " + config.ReleaseBranch
+			status.Commit = pr
+			return status
+		}
 		status.Status = "missing_required_state"
 		return status
 	}
@@ -434,7 +440,7 @@ func branchContains(path string, ancestor string, descendant string) bool {
 
 func isAcceptablePeerStatus(bound string, status string) bool {
 	if bound == BoundRelease {
-		return status == "related_merged_to_release" || status == "target_merged_to_release" || status == "release_pr_open"
+		return status == "related_merged_to_release" || status == "target_merged_to_release" || status == "release_pr_merged" || status == "release_pr_open"
 	}
 	switch status {
 	case "related_branch_exists", "related_merged_to_target", "related_merged_to_release", "target_merged_to_release":
@@ -442,6 +448,112 @@ func isAcceptablePeerStatus(bound string, status string) bool {
 	default:
 		return false
 	}
+}
+
+func mergedReleasePR(path string, repo string, headBranch string, baseBranch string) string {
+	repo = strings.TrimSpace(repo)
+	headBranch = strings.TrimSpace(headBranch)
+	baseBranch = strings.TrimSpace(baseBranch)
+	if repo == "" || headBranch == "" || baseBranch == "" {
+		return ""
+	}
+	if pr := mergedReleasePRFromEnv(path, repo, headBranch, baseBranch); pr != "" {
+		return pr
+	}
+	token := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"), os.Getenv("JANUS_REPO_TOKEN"), os.Getenv("BRANCH_COHERENCE_TOKEN"))
+	if token == "" {
+		return ""
+	}
+	if _, err := exec.LookPath("gh"); err != nil {
+		return ""
+	}
+	owner := firstNonEmpty(os.Getenv("JANUS_GITHUB_OWNER"), os.Getenv("GITHUB_REPOSITORY_OWNER"), "spark-harness")
+	apiPath := fmt.Sprintf(
+		"/repos/%s/%s/pulls?state=closed&head=%s:%s&base=%s",
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.QueryEscape(owner),
+		url.QueryEscape(headBranch),
+		url.QueryEscape(baseBranch),
+	)
+	cmd := exec.Command("gh", "api", apiPath)
+	cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	var pulls []struct {
+		Number   int    `json:"number"`
+		URL      string `json:"html_url"`
+		MergedAt string `json:"merged_at"`
+		MergeSHA string `json:"merge_commit_sha"`
+		Head     struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(output, &pulls); err != nil {
+		return ""
+	}
+	for _, pull := range pulls {
+		if pull.MergedAt == "" {
+			continue
+		}
+		if !mergeCommitReachable(path, baseBranch, pull.MergeSHA) {
+			continue
+		}
+		if pull.URL != "" {
+			return pull.URL
+		}
+		if pull.Number > 0 {
+			return fmt.Sprintf("PR #%d", pull.Number)
+		}
+		if pull.MergeSHA != "" {
+			return shortSHA(pull.MergeSHA)
+		}
+		if pull.Head.SHA != "" {
+			return shortSHA(pull.Head.SHA)
+		}
+		return "merged"
+	}
+	return ""
+}
+
+func mergedReleasePRFromEnv(path string, repo string, headBranch string, baseBranch string) string {
+	for _, entry := range strings.Split(os.Getenv("JANUS_MERGED_RELEASE_PRS"), ",") {
+		parts := strings.Split(strings.TrimSpace(entry), ":")
+		if len(parts) < 3 {
+			continue
+		}
+		if parts[0] != repo || parts[1] != headBranch || parts[2] != baseBranch {
+			continue
+		}
+		if len(parts) >= 4 && parts[3] != "" {
+			if !mergeCommitReachable(path, baseBranch, parts[3]) {
+				continue
+			}
+			if len(parts) >= 5 && parts[4] != "" {
+				return parts[4]
+			}
+			return shortSHA(parts[3])
+		}
+		return "merged"
+	}
+	return ""
+}
+
+func mergeCommitReachable(path string, releaseBranch string, mergeSHA string) bool {
+	mergeSHA = strings.TrimSpace(mergeSHA)
+	if mergeSHA == "" {
+		return true
+	}
+	releaseRef := resolveRef(path, releaseBranch)
+	if releaseRef == "" {
+		return true
+	}
+	if gitRun(path, "cat-file", "-e", mergeSHA+"^{commit}") != nil {
+		return true
+	}
+	return gitRun(path, "merge-base", "--is-ancestor", mergeSHA, releaseRef) == nil
 }
 
 func openReleasePR(repo string, headBranch string, baseBranch string) string {
@@ -857,8 +969,8 @@ func verifyJavaArtifact(dependency FormalDependency, status FormalEvidenceStatus
 		status.Detail = fmt.Sprintf("Java artifact %s version %s found in JANUS_JAVA_ARTIFACT_VERSIONS", dependency.Dependency, dependency.Version)
 		return status
 	}
-	token := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"), os.Getenv("IDL_JAVA_REPO_TOKEN"))
-	if token == "" {
+	tokens := githubTokens("IDL_JAVA_REPO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+	if len(tokens) == 0 {
 		status.Status = "blocked"
 		status.Detail = "missing GitHub token for Java artifact lookup"
 		return status
@@ -871,28 +983,35 @@ func verifyJavaArtifact(dependency FormalDependency, status FormalEvidenceStatus
 	owner := firstNonEmpty(os.Getenv("JANUS_GITHUB_OWNER"), os.Getenv("GITHUB_REPOSITORY_OWNER"), "spark-harness")
 	packageName := strings.ReplaceAll(dependency.Dependency, ":", ".")
 	apiPath := fmt.Sprintf("/orgs/%s/packages/maven/%s/versions", owner, url.PathEscape(packageName))
-	cmd := exec.Command("gh", "api", apiPath)
-	cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
-	output, err := cmd.Output()
-	if err != nil {
-		status.Status = "blocked"
-		status.Detail = fmt.Sprintf("cannot query Java artifact %s: %v", dependency.Dependency, err)
-		return status
-	}
-	var versions []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(output, &versions); err != nil {
-		status.Status = "blocked"
-		status.Detail = fmt.Sprintf("cannot parse Java artifact versions for %s: %v", dependency.Dependency, err)
-		return status
-	}
-	for _, version := range versions {
-		if version.Name == dependency.Version {
-			status.Status = "passed"
-			status.Detail = fmt.Sprintf("Java artifact %s version %s exists", dependency.Dependency, dependency.Version)
+	var queryErr error
+	for _, token := range tokens {
+		cmd := exec.Command("gh", "api", apiPath)
+		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+		output, err := cmd.Output()
+		if err != nil {
+			queryErr = err
+			continue
+		}
+		var versions []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(output, &versions); err != nil {
+			status.Status = "blocked"
+			status.Detail = fmt.Sprintf("cannot parse Java artifact versions for %s: %v", dependency.Dependency, err)
 			return status
 		}
+		for _, version := range versions {
+			if version.Name == dependency.Version {
+				status.Status = "passed"
+				status.Detail = fmt.Sprintf("Java artifact %s version %s exists", dependency.Dependency, dependency.Version)
+				return status
+			}
+		}
+	}
+	if queryErr != nil {
+		status.Status = "blocked"
+		status.Detail = fmt.Sprintf("cannot query Java artifact %s: %v", dependency.Dependency, queryErr)
+		return status
 	}
 	status.Status = "blocked"
 	status.Detail = fmt.Sprintf("Java artifact %s version %s is missing", dependency.Dependency, dependency.Version)
@@ -984,10 +1103,10 @@ func resolveRef(path string, branch string) string {
 		return ""
 	}
 	candidates := []string{
-		branch,
+		"refs/remotes/origin/" + branch,
 		"origin/" + branch,
 		"refs/heads/" + branch,
-		"refs/remotes/origin/" + branch,
+		branch,
 	}
 	for _, candidate := range candidates {
 		if gitRun(path, "rev-parse", "--verify", "--quiet", candidate) == nil {
@@ -1169,6 +1288,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func githubTokens(envNames ...string) []string {
+	seen := map[string]bool{}
+	var tokens []string
+	for _, name := range envNames {
+		token := strings.TrimSpace(os.Getenv(name))
+		if token == "" || seen[token] {
+			continue
+		}
+		seen[token] = true
+		tokens = append(tokens, token)
+	}
+	return tokens
 }
 
 func verifyError(code int, problems ...string) *VerifyError {

@@ -242,6 +242,47 @@ affected_repositories:
 	}
 }
 
+func TestVerifyReleaseBoundAcceptsPeerWithMergedReleasePR(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+	disableGitHubPREvidence(t)
+
+	writeRequirement(t, harness, "LEN-40", `---
+related_branch: "feature/LEN-40-delivery-flow"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-40
+`)
+	git(t, business, "checkout", "-b", "feature/LEN-40-delivery-flow")
+	writeFile(t, business, "feature-only.txt", "squash merged elsewhere")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "feat: unreleased local branch")
+	t.Setenv("JANUS_MERGED_RELEASE_PRS", "business-repo:feature/LEN-40-delivery-flow:master:1234567890abcdef:PR #17")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-40",
+		RepoName:      "harness-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-40-delivery-flow",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected merged release PR evidence to pass, got %v", err)
+	}
+	if len(result.Peers) != 1 || result.Peers[0].Status != "release_pr_merged" {
+		t.Fatalf("expected release_pr_merged peer status, got %#v", result.Peers)
+	}
+	if result.Peers[0].Commit != "PR #17" {
+		t.Fatalf("expected merged PR evidence, got %#v", result.Peers[0])
+	}
+}
+
 func TestVerifyReleaseBoundRunsBusinessContractScanFormalOnly(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
@@ -396,6 +437,61 @@ affected_repositories:
 		if evidence.Status != "passed" {
 			t.Fatalf("expected formal evidence to pass, got %#v", result.ContractScan.FormalEvidence)
 		}
+	}
+}
+
+func TestVerifyReleaseBoundFormalTagUsesRemoteReleaseRef(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+	idl := initRepo(t, workspace, "idl-repo")
+
+	writeRequirement(t, harness, "LEN-40", `---
+related_branch: "feature/LEN-40-delivery-flow"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-40
+`)
+	git(t, idl, "checkout", "-b", "release-squash")
+	writeFile(t, idl, "contract.proto", "syntax = \"proto3\";")
+	git(t, idl, "add", ".")
+	git(t, idl, "commit", "-m", "feat: add contract")
+	git(t, idl, "tag", "-a", "v1.2.3", "-m", "formal v1.2.3")
+	remoteMaster := gitOutput(idl, "rev-parse", "HEAD")
+	git(t, idl, "update-ref", "refs/remotes/origin/master", remoteMaster)
+	git(t, idl, "checkout", "master")
+
+	writeBusinessContractScanner(t, business)
+	writeContractConfig(t, business)
+	writePom(t, business, "1.0.0")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: add formal contract")
+	git(t, business, "checkout", "-b", "feature/LEN-40-delivery-flow")
+	writePom(t, business, "1.2.3")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: update formal contract")
+	t.Setenv("JANUS_JAVA_ARTIFACT_VERSIONS", "1.2.3")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-40",
+		RepoName:      "business-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-40-delivery-flow",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected remote release ref formal evidence to pass, got %v", err)
+	}
+	if result.ContractScan == nil || len(result.ContractScan.FormalEvidence) != 2 {
+		t.Fatalf("expected tag and artifact formal evidence, got %#v", result.ContractScan)
+	}
+	if got := result.ContractScan.FormalEvidence[0].Detail; !strings.Contains(got, "formal tag v1.2.3 is reachable") {
+		t.Fatalf("expected reachable formal tag detail, got %q", got)
 	}
 }
 
@@ -595,6 +691,7 @@ func disableGitHubPREvidence(t *testing.T) {
 	t.Setenv("JANUS_REPO_TOKEN", "")
 	t.Setenv("BRANCH_COHERENCE_TOKEN", "")
 	t.Setenv("JANUS_OPEN_RELEASE_PRS", "")
+	t.Setenv("JANUS_MERGED_RELEASE_PRS", "")
 }
 
 func writeFile(t *testing.T, root string, relative string, content string) {
