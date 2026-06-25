@@ -290,7 +290,7 @@ func parseStringList(value string) []string {
 }
 
 func inferAffectedRepositories(content string) []string {
-	known := []string{"harness-repo", "business-repo", "idl-repo", "idl-java-repo"}
+	known := []string{"harness-repo", "business-repo", "idl-repo", "idl-java-repo", "learning-docs-repo", "janus"}
 	var repos []string
 	for _, repo := range known {
 		if strings.Contains(content, repo) {

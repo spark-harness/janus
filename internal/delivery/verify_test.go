@@ -4,10 +4,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestInferAffectedRepositoriesIncludesGovernanceRepos(t *testing.T) {
+	content := "本需求影响 harness-repo、business-repo、learning-docs-repo 和 janus。"
+
+	got := inferAffectedRepositories(content)
+	want := []string{"harness-repo", "business-repo", "learning-docs-repo", "janus"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
 
 func TestVerifyReleaseBoundAcceptsMergedPeerAndFormalMode(t *testing.T) {
 	workspace := t.TempDir()
