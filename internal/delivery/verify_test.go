@@ -335,6 +335,100 @@ affected_repositories:
 	}
 }
 
+func TestVerifyReleaseBoundRunsBusinessToolingContractScan(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+
+	writeRequirement(t, harness, "LEN-99", `---
+related_branch: "feature/LEN-99-business-monorepo-layout"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-99
+`)
+	writeBusinessToolingContractScanner(t, business)
+	writeFile(t, business, "apps/applicant-api/pom.xml", "formal")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: add formal contract")
+	git(t, business, "checkout", "-b", "feature/LEN-99-business-monorepo-layout")
+	writeFile(t, business, "apps/applicant-api/pom.xml", "formal 1.2.3")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: keep formal contract")
+	git(t, harness, "checkout", "-b", "feature/LEN-99-business-monorepo-layout")
+	git(t, harness, "checkout", "master")
+	git(t, harness, "merge", "--no-ff", "feature/LEN-99-business-monorepo-layout", "-m", "merge feature/LEN-99-business-monorepo-layout")
+	git(t, harness, "branch", "-D", "feature/LEN-99-business-monorepo-layout")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-99",
+		RepoName:      "business-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-99-business-monorepo-layout",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected tooling contract scan path to pass, got %v", err)
+	}
+	if result == nil || result.ContractScan == nil {
+		t.Fatalf("expected contract scan result, got %#v", result)
+	}
+	if result.ContractScan.Mode != "formal-only" {
+		t.Fatalf("expected formal-only scan mode, got %q", result.ContractScan.Mode)
+	}
+	if result.ContractScan.Status != "passed" {
+		t.Fatalf("expected passing contract scan, got %#v", result.ContractScan)
+	}
+}
+
+func TestVerifyReleaseBoundIgnoresBusinessToolingContractScanFixtures(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+
+	writeRequirement(t, harness, "LEN-99", `---
+related_branch: "feature/LEN-99-business-monorepo-layout"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-99
+`)
+	writeBusinessToolingContractScanner(t, business)
+	writeContractConfig(t, business)
+	writeFile(t, business, "tooling/contract-dependency-scan/fixtures/go-formal-pass/go.mod", "module example.com/fixture\n\nrequire github.com/spark-harness/idl-go-repo/user/v1 v1.8.0\n")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: add scanner fixture")
+	git(t, business, "checkout", "-b", "feature/LEN-99-business-monorepo-layout")
+	writeFile(t, business, "tooling/contract-dependency-scan/fixtures/go-formal-pass/go.mod", "module example.com/fixture\n\nrequire github.com/spark-harness/idl-go-repo/user/v1 v1.8.1\n")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: move scanner fixture")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-99",
+		RepoName:      "business-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-99-business-monorepo-layout",
+		Now:           fixedTime(),
+	})
+
+	if err != nil {
+		t.Fatalf("expected scanner fixtures to be ignored by formal evidence, got %v", err)
+	}
+	if result.ContractScan == nil || result.ContractScan.Status != "passed" {
+		t.Fatalf("expected passing contract scan, got %#v", result.ContractScan)
+	}
+	if len(result.ContractScan.FormalDependencies) != 0 {
+		t.Fatalf("expected no formal dependencies from scanner fixtures, got %#v", result.ContractScan.FormalDependencies)
+	}
+}
+
 func TestVerifyReleaseBoundSkipsDeletedContractDependencyFiles(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
@@ -754,6 +848,39 @@ func writeFile(t *testing.T, root string, relative string, content string) {
 func writeBusinessContractScanner(t *testing.T, root string) {
 	t.Helper()
 	writeFile(t, root, "scripts/contract_dependency_scan.py", `#!/usr/bin/env python3
+import argparse
+import pathlib
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", required=True)
+parser.add_argument("--root", default=".")
+parser.add_argument("--path", action="append", default=[])
+args = parser.parse_args()
+paths = [pathlib.Path(args.root, path) for path in args.path] if args.path else [pathlib.Path(args.root, "pom.xml")]
+text = "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
+if args.path and not text:
+    print(f"allowed no existing contract dependency files for {args.mode}")
+    sys.exit(0)
+if "1.2.3-rc." in text:
+    version = "rc"
+elif "1.2.3" in text or "formal" in text:
+    version = "formal"
+else:
+    version = "rc"
+if args.mode == "formal-only" and version != "formal":
+    print(f"blocked {version} for {args.mode}")
+    sys.exit(1)
+if args.mode == "rc-or-formal" and version not in {"rc", "formal"}:
+    print(f"blocked {version} for {args.mode}")
+    sys.exit(1)
+print(f"allowed {version} for {args.mode}")
+`)
+}
+
+func writeBusinessToolingContractScanner(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, root, "tooling/contract-dependency-scan/contract_dependency_scan.py", `#!/usr/bin/env python3
 import argparse
 import pathlib
 import sys

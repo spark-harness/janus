@@ -641,10 +641,10 @@ func runBusinessContractScan(path string, mode string, baseBranch string, headBr
 		status.Output = "business-repo checkout is missing"
 		return status
 	}
-	script := filepath.Join(path, "scripts", "contract_dependency_scan.py")
-	if _, err := os.Stat(script); err != nil {
+	script := businessContractScannerPath(path)
+	if script == "" {
 		status.Status = "scanner_missing"
-		status.Output = "scripts/contract_dependency_scan.py is missing"
+		status.Output = "tooling/contract-dependency-scan/contract_dependency_scan.py is missing"
 		return status
 	}
 	changedPaths, diffErr := changedContractDependencyPaths(path, baseBranch, headBranch)
@@ -659,7 +659,7 @@ func runBusinessContractScan(path string, mode string, baseBranch string, headBr
 		return status
 	}
 	status.ChangedPaths = changedPaths
-	args := []string{"scripts/contract_dependency_scan.py", "--mode", mode, "--root", "."}
+	args := []string{script, "--mode", mode, "--root", "."}
 	for _, changedPath := range changedPaths {
 		args = append(args, "--path", changedPath)
 	}
@@ -683,6 +683,18 @@ func runBusinessContractScan(path string, mode string, baseBranch string, headBr
 	status.FormalDependencies = dependencies
 	status.Status = "passed"
 	return status
+}
+
+func businessContractScannerPath(path string) string {
+	for _, relative := range []string{
+		filepath.Join("tooling", "contract-dependency-scan", "contract_dependency_scan.py"),
+		filepath.Join("scripts", "contract_dependency_scan.py"),
+	} {
+		if _, err := os.Stat(filepath.Join(path, relative)); err == nil {
+			return relative
+		}
+	}
+	return ""
 }
 
 type contractConfig struct {
@@ -717,6 +729,9 @@ func collectFormalDependencies(businessPath string, changedPaths []string) ([]Fo
 
 	var dependencies []FormalDependency
 	for _, changedPath := range changedPaths {
+		if shouldIgnoreContractDependencyEvidencePath(changedPath) {
+			continue
+		}
 		fullPath := filepath.Join(businessPath, filepath.FromSlash(changedPath))
 		if _, err := os.Stat(fullPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -740,6 +755,20 @@ func collectFormalDependencies(businessPath string, changedPaths []string) ([]Fo
 		}
 	}
 	return dependencies, nil
+}
+
+func shouldIgnoreContractDependencyEvidencePath(path string) bool {
+	normalized := filepath.ToSlash(path)
+	ignoredPrefixes := []string{
+		"tooling/contract-dependency-scan/fixtures/",
+		"tests/contract_dependency_scan/fixtures/",
+	}
+	for _, prefix := range ignoredPrefixes {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func collectMavenFormalDependencies(path string, displayPath string, config contractConfig) ([]FormalDependency, error) {
@@ -1076,6 +1105,9 @@ func changedContractDependencyPaths(path string, baseBranch string, headBranch s
 	var paths []string
 	for _, line := range strings.Split(output, "\n") {
 		changedPath := strings.TrimSpace(line)
+		if shouldIgnoreContractDependencyEvidencePath(changedPath) {
+			continue
+		}
 		if isContractDependencyPath(changedPath) {
 			paths = append(paths, changedPath)
 		}
