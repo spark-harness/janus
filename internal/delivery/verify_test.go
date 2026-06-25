@@ -362,7 +362,7 @@ affected_repositories:
 
 # LEN-45
 	`)
-	writeBusinessContractScanner(t, business)
+	writeBusinessToolingContractScanner(t, business)
 	writeContractConfig(t, business)
 	writePom(t, business, "1.0.0")
 	git(t, business, "add", ".")
@@ -393,6 +393,52 @@ affected_repositories:
 	}
 }
 
+func TestVerifyReleaseBoundRejectsLegacyBusinessContractScannerPath(t *testing.T) {
+	workspace := t.TempDir()
+	harness := initRepo(t, workspace, "harness-repo")
+	business := initRepo(t, workspace, "business-repo")
+
+	writeRequirement(t, harness, "LEN-114", `---
+related_branch: "feature/LEN-114-java-ci"
+target_branch: "master"
+release_branch: "master"
+affected_repositories:
+  - business-repo
+---
+
+# LEN-114
+	`)
+	writeBusinessContractScanner(t, business)
+	writeFile(t, business, "pom.xml", "formal")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: add legacy scanner")
+	git(t, business, "checkout", "-b", "feature/LEN-114-java-ci")
+	writeFile(t, business, "pom.xml", "formal 1.2.3")
+	git(t, business, "add", ".")
+	git(t, business, "commit", "-m", "test: keep formal contract")
+
+	result, err := Verify(workspace, Options{
+		RequirementID: "LEN-114",
+		RepoName:      "business-repo",
+		BaseBranch:    "master",
+		HeadBranch:    "feature/LEN-114-java-ci",
+		Now:           fixedTime(),
+	})
+
+	if err == nil {
+		t.Fatal("expected legacy scanner path to fail")
+	}
+	if result == nil || result.ContractScan == nil {
+		t.Fatalf("expected contract scan result, got %#v", result)
+	}
+	if result.ContractScan.Status != "scanner_missing" {
+		t.Fatalf("expected scanner_missing, got %#v", result.ContractScan)
+	}
+	if !strings.Contains(result.ContractScan.Output, "tooling/contract-dependency-scan/contract_dependency_scan.py is missing") {
+		t.Fatalf("expected tooling scanner path message, got %q", result.ContractScan.Output)
+	}
+}
+
 func TestVerifyIntegrationBoundAllowsBusinessContractRC(t *testing.T) {
 	workspace := t.TempDir()
 	harness := initRepo(t, workspace, "harness-repo")
@@ -408,7 +454,7 @@ affected_repositories:
 
 # LEN-40
 	`)
-	writeBusinessContractScanner(t, business)
+	writeBusinessToolingContractScanner(t, business)
 	writeFile(t, business, "pom.xml", "formal")
 	git(t, business, "add", ".")
 	git(t, business, "commit", "-m", "test: add formal contract")
@@ -466,7 +512,7 @@ affected_repositories:
 	git(t, idl, "checkout", "master")
 	git(t, idl, "merge", "--no-ff", "feature/LEN-40-delivery-flow", "-m", "merge feature/LEN-40-delivery-flow")
 	git(t, idl, "tag", "v1.2.3")
-	writeBusinessContractScanner(t, business)
+	writeBusinessToolingContractScanner(t, business)
 	writeContractConfig(t, business)
 	writePom(t, business, "1.0.0")
 	git(t, business, "add", ".")
@@ -523,7 +569,7 @@ affected_repositories:
 	git(t, idl, "update-ref", "refs/remotes/origin/master", remoteMaster)
 	git(t, idl, "checkout", "master")
 
-	writeBusinessContractScanner(t, business)
+	writeBusinessToolingContractScanner(t, business)
 	writeContractConfig(t, business)
 	writePom(t, business, "1.0.0")
 	git(t, business, "add", ".")
@@ -583,7 +629,7 @@ affected_repositories:
 	git(t, idl, "checkout", "master")
 	git(t, idl, "merge", "--no-ff", "feature/LEN-40-delivery-flow", "-m", "merge feature/LEN-40-delivery-flow")
 	git(t, idl, "tag", "v1.2.3")
-	writeBusinessContractScanner(t, business)
+	writeBusinessToolingContractScanner(t, business)
 	writeContractConfig(t, business)
 	writePom(t, business, "1.0.0")
 	git(t, business, "add", ".")
@@ -766,6 +812,39 @@ func writeFile(t *testing.T, root string, relative string, content string) {
 func writeBusinessContractScanner(t *testing.T, root string) {
 	t.Helper()
 	writeFile(t, root, "scripts/contract_dependency_scan.py", `#!/usr/bin/env python3
+import argparse
+import pathlib
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", required=True)
+parser.add_argument("--root", default=".")
+parser.add_argument("--path", action="append", default=[])
+args = parser.parse_args()
+paths = [pathlib.Path(args.root, path) for path in args.path] if args.path else [pathlib.Path(args.root, "pom.xml")]
+text = "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
+if args.path and not text:
+    print(f"allowed no existing contract dependency files for {args.mode}")
+    sys.exit(0)
+if "1.2.3-rc." in text:
+    version = "rc"
+elif "1.2.3" in text or "formal" in text:
+    version = "formal"
+else:
+    version = "rc"
+if args.mode == "formal-only" and version != "formal":
+    print(f"blocked {version} for {args.mode}")
+    sys.exit(1)
+if args.mode == "rc-or-formal" and version not in {"rc", "formal"}:
+    print(f"blocked {version} for {args.mode}")
+    sys.exit(1)
+print(f"allowed {version} for {args.mode}")
+`)
+}
+
+func writeBusinessToolingContractScanner(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, root, "tooling/contract-dependency-scan/contract_dependency_scan.py", `#!/usr/bin/env python3
 import argparse
 import pathlib
 import sys

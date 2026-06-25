@@ -641,10 +641,10 @@ func runBusinessContractScan(path string, mode string, baseBranch string, headBr
 		status.Output = "business-repo checkout is missing"
 		return status
 	}
-	script := filepath.Join(path, "scripts", "contract_dependency_scan.py")
-	if _, err := os.Stat(script); err != nil {
+	script := filepath.Join("tooling", "contract-dependency-scan", "contract_dependency_scan.py")
+	if _, err := os.Stat(filepath.Join(path, script)); err != nil {
 		status.Status = "scanner_missing"
-		status.Output = "scripts/contract_dependency_scan.py is missing"
+		status.Output = "tooling/contract-dependency-scan/contract_dependency_scan.py is missing"
 		return status
 	}
 	changedPaths, diffErr := changedContractDependencyPaths(path, baseBranch, headBranch)
@@ -659,7 +659,7 @@ func runBusinessContractScan(path string, mode string, baseBranch string, headBr
 		return status
 	}
 	status.ChangedPaths = changedPaths
-	args := []string{"scripts/contract_dependency_scan.py", "--mode", mode, "--root", "."}
+	args := []string{script, "--mode", mode, "--root", "."}
 	for _, changedPath := range changedPaths {
 		args = append(args, "--path", changedPath)
 	}
